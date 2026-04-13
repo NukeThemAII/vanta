@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+.env.local
+.pnpm-store/
+coverage/
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
+*.log
