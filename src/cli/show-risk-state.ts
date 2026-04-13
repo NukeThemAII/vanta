@@ -16,6 +16,12 @@ async function main(): Promise<void> {
     const openOrderSnapshot = container.reconciliationService.getLatestPersistedOpenOrderSnapshot();
     const trustState = container.runtimeTrustController.getSnapshot();
     const recentRiskEvents = container.riskEventRepository.listRecent(10);
+    const recentFills =
+      config.operatorAddress === undefined ? [] : container.fillRepository.listRecent(config.operatorAddress, 10);
+    const dailyClosedPnl =
+      config.operatorAddress === undefined ? null : container.fillRepository.sumClosedPnlSince(config.operatorAddress, startOfUtcDayMs());
+    const weeklyClosedPnl =
+      config.operatorAddress === undefined ? null : container.fillRepository.sumClosedPnlSince(config.operatorAddress, startOfUtcWeekMs());
 
     console.log(
       JSON.stringify(
@@ -39,6 +45,12 @@ async function main(): Promise<void> {
                 syncedAt: openOrderSnapshot.syncedAt,
                 orderCount: openOrderSnapshot.orders.length
               },
+          realizedPnl: {
+            dailyClosedPnl,
+            weeklyClosedPnl,
+            recentFillCount: recentFills.length
+          },
+          recentFills,
           recentRiskEvents
         },
         null,
@@ -52,3 +64,13 @@ async function main(): Promise<void> {
 }
 
 await main();
+
+function startOfUtcDayMs(now = new Date()): number {
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+}
+
+function startOfUtcWeekMs(now = new Date()): number {
+  const dayOfWeek = now.getUTCDay();
+  const daysSinceMonday = (dayOfWeek + 6) % 7;
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - daysSinceMonday);
+}

@@ -11,12 +11,17 @@ import type {
   FormattedOrderRequest,
   PlaceOrderRequest,
 } from "../exchange/execution-types.js";
+import type { FillRepository } from "../persistence/repositories/fill-repository.js";
 import type { OrderStateRepository } from "../persistence/repositories/order-state-repository.js";
 import type { RiskEventRepository } from "../persistence/repositories/risk-event-repository.js";
 import type { AccountMirrorSnapshot } from "../portfolio/account-mirror.js";
 import type { RuntimeTrustController } from "../services/runtime-trust-controller.js";
+import { evaluateConsecutiveLossCooldown } from "./guards/cooldown.js";
+import { evaluateRealizedDrawdown } from "./guards/drawdown.js";
 import { evaluateConcurrentPositionLimit, evaluateMaxOrderNotional, evaluateOpenOrderLimit, evaluateStopBasedSizing } from "./guards/exposure.js";
+import { evaluateFundingRate } from "./guards/funding.js";
 import { evaluateLeverageLimit } from "./guards/leverage.js";
+import { evaluateRateLimitHeadroom } from "./guards/rate-limit.js";
 import { evaluatePriceDeviation } from "./guards/slippage.js";
 import { evaluateFreshAccountState } from "./guards/stale-state.js";
 import type { RiskActionType, RiskDecision } from "./types.js";
@@ -26,6 +31,7 @@ interface RiskEngineOptions {
   readonly logger: Logger;
   readonly runtimeTrustController: RuntimeTrustController;
   readonly orderStateRepository: OrderStateRepository;
+  readonly fillRepository: FillRepository;
   readonly riskEventRepository: RiskEventRepository;
   readonly getAssetRegistry: () => AssetRegistry | undefined;
   readonly getAccountSnapshot: () => AccountMirrorSnapshot | undefined;
@@ -63,6 +69,127 @@ export class RiskEngine {
     );
 
     let order = args.order;
+    const isNewRisk = order.reduceOnly !== true;
+    if (isNewRisk) {
+      const rateLimitOutcome = evaluateRateLimitHeadroom({
+        rateLimit: accountSnapshot.rateLimit,
+        minRateLimitSurplus: this.options.config.risk.minRateLimitSurplus
+      });
+      guardOutcomes.push(outcomeFromGuard("rate_limit_headroom", rateLimitOutcome.ok ? "approved" : "rejected", rateLimitOutcome.message, {
+        requestsSurplus: rateLimitOutcome.requestsSurplus ?? null,
+        minRateLimitSurplus: this.options.config.risk.minRateLimitSurplus
+      }));
+      if (!rateLimitOutcome.ok) {
+        this.reject("place_order", args.identity, args.bootId, order, args.correlationId, rateLimitOutcome.message, guardOutcomes);
+      }
+
+      const openOrderOutcome = evaluateOpenOrderLimit({
+        activeOrders: context.activeOrders,
+        maxOpenOrders: this.options.config.risk.maxOpenOrders
+      });
+      guardOutcomes.push(outcomeFromGuard("open_order_limit", openOrderOutcome.ok ? "approved" : "rejected", openOrderOutcome.message));
+      if (!openOrderOutcome.ok) {
+        this.reject("place_order", args.identity, args.bootId, order, args.correlationId, openOrderOutcome.message, guardOutcomes);
+      }
+
+      const positionOutcome = evaluateConcurrentPositionLimit({
+        accountSnapshot,
+        maxConcurrentPositions: this.options.config.risk.maxConcurrentPositions,
+        marketSymbol: order.marketSymbol,
+        reduceOnly: order.reduceOnly
+      });
+      guardOutcomes.push(outcomeFromGuard("position_limit", positionOutcome.ok ? "approved" : "rejected", positionOutcome.message));
+      if (!positionOutcome.ok) {
+        this.reject("place_order", args.identity, args.bootId, order, args.correlationId, positionOutcome.message, guardOutcomes);
+      }
+
+      const drawdownOutcome = evaluateRealizedDrawdown({
+        dailyClosedPnl: this.options.fillRepository.sumClosedPnlSince(
+          args.identity.operatorAddress,
+          startOfUtcDayMs()
+        ),
+        weeklyClosedPnl: this.options.fillRepository.sumClosedPnlSince(
+          args.identity.operatorAddress,
+          startOfUtcWeekMs()
+        ),
+        maxDailyRealizedDrawdownUsd: this.options.config.risk.maxDailyRealizedDrawdownUsd,
+        maxWeeklyRealizedDrawdownUsd: this.options.config.risk.maxWeeklyRealizedDrawdownUsd
+      });
+      guardOutcomes.push(outcomeFromGuard("realized_drawdown", drawdownOutcome.ok ? "approved" : "rejected", drawdownOutcome.message, {
+        dailyClosedPnl: drawdownOutcome.dailyClosedPnl,
+        weeklyClosedPnl: drawdownOutcome.weeklyClosedPnl,
+        maxDailyRealizedDrawdownUsd: this.options.config.risk.maxDailyRealizedDrawdownUsd,
+        maxWeeklyRealizedDrawdownUsd: this.options.config.risk.maxWeeklyRealizedDrawdownUsd
+      }));
+      if (!drawdownOutcome.ok) {
+        this.reject("place_order", args.identity, args.bootId, order, args.correlationId, drawdownOutcome.message, guardOutcomes);
+      }
+
+      const cooldownStreak = this.options.fillRepository.getConsecutiveLossStreak({
+        operatorAddress: args.identity.operatorAddress,
+        marketSymbol: order.marketSymbol,
+        limit: this.options.config.risk.consecutiveLossCooldownCount
+      });
+      const cooldownOutcome = evaluateConsecutiveLossCooldown({
+        consecutiveLossCount: cooldownStreak.count,
+        cooldownCount: this.options.config.risk.consecutiveLossCooldownCount,
+        cooldownMinutes: this.options.config.risk.consecutiveLossCooldownMinutes,
+        ...(cooldownStreak.lastLossTimestampMs !== undefined
+          ? { lastLossTimestampMs: cooldownStreak.lastLossTimestampMs }
+          : {})
+      });
+      guardOutcomes.push(outcomeFromGuard("consecutive_loss_cooldown", cooldownOutcome.ok ? "approved" : "rejected", cooldownOutcome.message, {
+        consecutiveLossCount: cooldownOutcome.consecutiveLossCount,
+        cooldownEndsAtMs: cooldownOutcome.cooldownEndsAtMs ?? null,
+        cooldownMinutes: this.options.config.risk.consecutiveLossCooldownMinutes
+      }));
+      if (!cooldownOutcome.ok) {
+        this.reject("place_order", args.identity, args.bootId, order, args.correlationId, cooldownOutcome.message, guardOutcomes);
+      }
+
+      const fundingOutcome = evaluateFundingRate({
+        side: order.side,
+        fundingRate: asset.context.fundingRate,
+        maxAbsoluteFundingRate: this.options.config.risk.maxAbsoluteFundingRate
+      });
+      guardOutcomes.push(outcomeFromGuard("funding_threshold", fundingOutcome.ok ? "approved" : "rejected", fundingOutcome.message, {
+        fundingRate: fundingOutcome.fundingRate,
+        maxAbsoluteFundingRate: this.options.config.risk.maxAbsoluteFundingRate
+      }));
+      if (!fundingOutcome.ok) {
+        this.reject("place_order", args.identity, args.bootId, order, args.correlationId, fundingOutcome.message, guardOutcomes);
+      }
+    }
+
+    const notionalOutcome = evaluateMaxOrderNotional({
+      order,
+      maxOrderNotionalUsd: this.options.config.risk.maxOrderNotionalUsd
+    });
+    guardOutcomes.push(outcomeFromGuard("max_notional", notionalOutcome.ok ? "approved" : "rejected", notionalOutcome.message, {
+      requestedNotionalUsd: notionalOutcome.requestedNotionalUsd ?? null,
+      limitUsd: this.options.config.risk.maxOrderNotionalUsd
+    }));
+    if (!notionalOutcome.ok) {
+      this.reject("place_order", args.identity, args.bootId, order, args.correlationId, notionalOutcome.message, guardOutcomes);
+    }
+
+    const referencePrice = this.resolveReferencePrice(asset);
+    const slippageOutcome = evaluatePriceDeviation({
+      order,
+      referencePrice: referencePrice.value,
+      maxPriceDeviationBps: this.options.config.risk.maxPriceDeviationBps
+    });
+    guardOutcomes.push(outcomeFromGuard("aggressive_price_deviation", slippageOutcome.ok ? "approved" : "rejected", slippageOutcome.message, {
+      referencePriceSource: referencePrice.source,
+      referencePrice: slippageOutcome.referencePrice,
+      boundaryPrice: slippageOutcome.boundaryPrice,
+      actualPrice: slippageOutcome.actualPrice,
+      maxPriceDeviationBps: this.options.config.risk.maxPriceDeviationBps
+    }));
+    if (!slippageOutcome.ok) {
+      this.reject("place_order", args.identity, args.bootId, order, args.correlationId, slippageOutcome.message, guardOutcomes);
+    }
+
     const sizingOutcome = evaluateStopBasedSizing({
       order,
       riskConfig: this.options.config.risk,
@@ -86,57 +213,6 @@ export class RiskEngine {
         ...order,
         size: sizingOutcome.approvedSize
       };
-    }
-
-    const isNewRisk = order.reduceOnly !== true;
-    if (isNewRisk) {
-      const openOrderOutcome = evaluateOpenOrderLimit({
-        activeOrders: context.activeOrders,
-        maxOpenOrders: this.options.config.risk.maxOpenOrders
-      });
-      guardOutcomes.push(outcomeFromGuard("open_order_limit", openOrderOutcome.ok ? "approved" : "rejected", openOrderOutcome.message));
-      if (!openOrderOutcome.ok) {
-        this.reject("place_order", args.identity, args.bootId, order, args.correlationId, openOrderOutcome.message, guardOutcomes);
-      }
-
-      const positionOutcome = evaluateConcurrentPositionLimit({
-        accountSnapshot,
-        maxConcurrentPositions: this.options.config.risk.maxConcurrentPositions,
-        marketSymbol: order.marketSymbol,
-        reduceOnly: order.reduceOnly
-      });
-      guardOutcomes.push(outcomeFromGuard("position_limit", positionOutcome.ok ? "approved" : "rejected", positionOutcome.message));
-      if (!positionOutcome.ok) {
-        this.reject("place_order", args.identity, args.bootId, order, args.correlationId, positionOutcome.message, guardOutcomes);
-      }
-    }
-
-    const notionalOutcome = evaluateMaxOrderNotional({
-      order,
-      maxOrderNotionalUsd: this.options.config.risk.maxOrderNotionalUsd
-    });
-    guardOutcomes.push(outcomeFromGuard("max_notional", notionalOutcome.ok ? "approved" : "rejected", notionalOutcome.message, {
-      requestedNotionalUsd: notionalOutcome.requestedNotionalUsd ?? null,
-      limitUsd: this.options.config.risk.maxOrderNotionalUsd
-    }));
-    if (!notionalOutcome.ok) {
-      this.reject("place_order", args.identity, args.bootId, order, args.correlationId, notionalOutcome.message, guardOutcomes);
-    }
-
-    const referencePrice = resolveReferencePrice(asset);
-    const slippageOutcome = evaluatePriceDeviation({
-      order,
-      referencePrice,
-      maxPriceDeviationBps: this.options.config.risk.maxPriceDeviationBps
-    });
-    guardOutcomes.push(outcomeFromGuard("aggressive_price_deviation", slippageOutcome.ok ? "approved" : "rejected", slippageOutcome.message, {
-      referencePrice: slippageOutcome.referencePrice,
-      boundaryPrice: slippageOutcome.boundaryPrice,
-      actualPrice: slippageOutcome.actualPrice,
-      maxPriceDeviationBps: this.options.config.risk.maxPriceDeviationBps
-    }));
-    if (!slippageOutcome.ok) {
-      this.reject("place_order", args.identity, args.bootId, order, args.correlationId, slippageOutcome.message, guardOutcomes);
     }
 
     this.recordDecision("place_order", args.identity, args.bootId, adjustedDecision(guardOutcomes), order.marketSymbol, order.assetId, args.correlationId, "Risk checks approved place-order request", {
@@ -188,12 +264,14 @@ export class RiskEngine {
       this.reject("modify_order", args.identity, args.bootId, args.modify.order, args.correlationId, notionalOutcome.message, guardOutcomes);
     }
 
+    const referencePrice = this.resolveReferencePrice(asset);
     const slippageOutcome = evaluatePriceDeviation({
       order: args.modify.order,
-      referencePrice: resolveReferencePrice(asset),
+      referencePrice: referencePrice.value,
       maxPriceDeviationBps: this.options.config.risk.maxPriceDeviationBps
     });
     guardOutcomes.push(outcomeFromGuard("aggressive_price_deviation", slippageOutcome.ok ? "approved" : "rejected", slippageOutcome.message, {
+      referencePriceSource: referencePrice.source,
       referencePrice: slippageOutcome.referencePrice,
       boundaryPrice: slippageOutcome.boundaryPrice,
       actualPrice: slippageOutcome.actualPrice,
@@ -387,7 +465,29 @@ export class RiskEngine {
       return;
     }
 
-    this.options.logger.debug(logPayload, message);
+      this.options.logger.debug(logPayload, message);
+  }
+
+  private resolveReferencePrice(asset: PerpAssetRecord): {
+    readonly value: string;
+    readonly source: "mid" | "mark" | "oracle";
+  } {
+    if (asset.context.midPrice !== null) {
+      return { value: asset.context.midPrice, source: "mid" };
+    }
+
+    this.options.logger.warn(
+      {
+        marketSymbol: asset.symbol,
+        markPrice: asset.context.markPrice,
+        oraclePrice: asset.context.oraclePrice
+      },
+      "Mid price unavailable for risk checks; falling back to mark/oracle price"
+    );
+
+    return asset.context.markPrice !== ""
+      ? { value: asset.context.markPrice, source: "mark" }
+      : { value: asset.context.oraclePrice, source: "oracle" };
   }
 }
 
@@ -416,10 +516,16 @@ function adjustedDecision(guardOutcomes: readonly GuardOutcome[]): RiskDecision 
   return guardOutcomes.some((outcome) => outcome.decision === "adjusted") ? "adjusted" : "approved";
 }
 
-function resolveReferencePrice(asset: PerpAssetRecord): string {
-  return asset.context.midPrice ?? asset.context.markPrice ?? asset.context.oraclePrice;
-}
-
 function countActivePositions(accountSnapshot: AccountMirrorSnapshot): number {
   return accountSnapshot.positions.filter((position) => compareDecimalStrings(position.size, "0") !== 0).length;
+}
+
+function startOfUtcDayMs(now = new Date()): number {
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+}
+
+function startOfUtcWeekMs(now = new Date()): number {
+  const dayOfWeek = now.getUTCDay();
+  const daysSinceMonday = (dayOfWeek + 6) % 7;
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - daysSinceMonday);
 }

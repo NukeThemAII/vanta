@@ -30,7 +30,9 @@ import {
   normalizeAccountSnapshot
 } from "../portfolio/account-mirror.js";
 import type { AccountMirrorSnapshot } from "../portfolio/account-mirror.js";
+import { normalizeUserFills } from "../portfolio/fills.js";
 import type { AssetRegistryRepository } from "../persistence/repositories/asset-registry-repository.js";
+import type { FillRepository } from "../persistence/repositories/fill-repository.js";
 import {
   type ReconciliationRunRecord,
   type ReconciliationRepository
@@ -59,8 +61,11 @@ interface ReconciliationServiceOptions {
   readonly stateSnapshotRepository: StateSnapshotRepository;
   readonly reconciliationRepository: ReconciliationRepository;
   readonly orderStateRepository: OrderStateRepository;
+  readonly fillRepository: FillRepository;
   readonly runtimeTrustController: RuntimeTrustController;
 }
+
+const FILL_RECONCILIATION_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 
 export class ReconciliationService {
   private readonly accountMirror = new AccountStateMirror();
@@ -165,7 +170,13 @@ export class ReconciliationService {
       let openOrderSnapshot: OpenOrderStateSnapshot | undefined;
 
       if (this.options.config.operatorAddress !== undefined) {
-        const userState = await this.options.exchangeClient.fetchUserExchangeState(this.options.config.operatorAddress);
+        const [userState, recentFills] = await Promise.all([
+          this.options.exchangeClient.fetchUserExchangeState(this.options.config.operatorAddress),
+          this.options.exchangeClient.fetchUserFillsByTime(
+            this.options.config.operatorAddress,
+            Date.now() - FILL_RECONCILIATION_LOOKBACK_MS
+          )
+        ]);
 
         if (userState === undefined) {
           throw new BootstrapError("Operator exchange state could not be loaded during reconciliation");
@@ -193,6 +204,17 @@ export class ReconciliationService {
 
         this.options.stateSnapshotRepository.saveAccountSnapshot(accountSnapshot, args.bootId);
         this.options.stateSnapshotRepository.saveOpenOrderSnapshot(openOrderSnapshot, args.bootId);
+        this.options.fillRepository.upsertMany(
+          normalizeUserFills({
+            operatorAddress: this.options.config.operatorAddress,
+            network: this.options.config.network.name,
+            registry,
+            fills: recentFills,
+            isSnapshot: true,
+            recordedAt: startedAt
+          }),
+          args.bootId
+        );
       }
 
       const issues = buildReconciliationIssues({

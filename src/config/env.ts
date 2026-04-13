@@ -96,6 +96,24 @@ const positiveInteger = (defaultValue: number) =>
     z.number().int().positive()
   );
 
+const nonNegativeInteger = (defaultValue: number) =>
+  z.preprocess(
+    (value) => {
+      const normalized = blankToUndefined(value);
+      if (normalized === undefined) {
+        return defaultValue;
+      }
+      if (typeof normalized === "number") {
+        return normalized;
+      }
+      if (typeof normalized === "string") {
+        return Number(normalized);
+      }
+      return normalized;
+    },
+    z.number().int().min(0)
+  );
+
 const positiveNumber = (defaultValue: number, upperBound?: number) =>
   z.preprocess(
     (value) => {
@@ -150,6 +168,12 @@ const ENV_SCHEMA = z.object({
     1
   ),
   VANTA_RISK_DEFAULT_FRACTION_OF_ACCOUNT: positiveDecimalString(DEFAULT_RISK_CONFIG.defaultRiskFractionOfAccount),
+  VANTA_RISK_MAX_DAILY_REALIZED_DRAWDOWN_USD: positiveDecimalString(DEFAULT_RISK_CONFIG.maxDailyRealizedDrawdownUsd),
+  VANTA_RISK_MAX_WEEKLY_REALIZED_DRAWDOWN_USD: positiveDecimalString(DEFAULT_RISK_CONFIG.maxWeeklyRealizedDrawdownUsd),
+  VANTA_RISK_CONSECUTIVE_LOSS_COOLDOWN_COUNT: positiveInteger(DEFAULT_RISK_CONFIG.consecutiveLossCooldownCount),
+  VANTA_RISK_CONSECUTIVE_LOSS_COOLDOWN_MINUTES: positiveInteger(DEFAULT_RISK_CONFIG.consecutiveLossCooldownMinutes),
+  VANTA_RISK_MAX_ABSOLUTE_FUNDING_RATE: positiveDecimalString(DEFAULT_RISK_CONFIG.maxAbsoluteFundingRate),
+  VANTA_RISK_MIN_RATE_LIMIT_SURPLUS: nonNegativeInteger(DEFAULT_RISK_CONFIG.minRateLimitSurplus),
   VANTA_RISK_ENFORCE_STOP_LOSS_FOR_ENTRIES: booleanish(DEFAULT_RISK_CONFIG.enforceStopLossForEntries)
 });
 
@@ -179,6 +203,12 @@ function buildAppConfig(parsed: ParsedEnvironment): AppConfig {
       maxPriceDeviationBps: parsed.VANTA_RISK_MAX_PRICE_DEVIATION_BPS,
       maxLeverageFractionOfExchangeMax: parsed.VANTA_RISK_MAX_LEVERAGE_FRACTION_OF_EXCHANGE_MAX,
       defaultRiskFractionOfAccount: parsed.VANTA_RISK_DEFAULT_FRACTION_OF_ACCOUNT,
+      maxDailyRealizedDrawdownUsd: parsed.VANTA_RISK_MAX_DAILY_REALIZED_DRAWDOWN_USD,
+      maxWeeklyRealizedDrawdownUsd: parsed.VANTA_RISK_MAX_WEEKLY_REALIZED_DRAWDOWN_USD,
+      consecutiveLossCooldownCount: parsed.VANTA_RISK_CONSECUTIVE_LOSS_COOLDOWN_COUNT,
+      consecutiveLossCooldownMinutes: parsed.VANTA_RISK_CONSECUTIVE_LOSS_COOLDOWN_MINUTES,
+      maxAbsoluteFundingRate: parsed.VANTA_RISK_MAX_ABSOLUTE_FUNDING_RATE,
+      minRateLimitSurplus: parsed.VANTA_RISK_MIN_RATE_LIMIT_SURPLUS,
       enforceStopLossForEntries: parsed.VANTA_RISK_ENFORCE_STOP_LOSS_FOR_ENTRIES
     },
     watchedMarkets: parsed.VANTA_MARKETS,

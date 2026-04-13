@@ -12,6 +12,7 @@ import type {
   OrderStatusResponse,
   SpotClearinghouseStateResponse,
   SpotMetaAndAssetCtxsResponse,
+  UserFillsByTimeResponse,
   UserRateLimitResponse
 } from "@nktkas/hyperliquid/api/info";
 import type { Logger } from "pino";
@@ -167,6 +168,19 @@ export class HyperliquidClient {
     return await this.infoClient.orderStatus({
       user: operatorAddress,
       oid: orderIdentifier
+    });
+  }
+
+  async fetchUserFillsByTime(
+    operatorAddress: Address,
+    startTime: number,
+    endTime = Date.now()
+  ): Promise<UserFillsByTimeResponse> {
+    return await this.infoClient.userFillsByTime({
+      user: operatorAddress,
+      startTime,
+      endTime,
+      aggregateByTime: false
     });
   }
 }

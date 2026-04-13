@@ -14,6 +14,7 @@ describe("parseAppConfig", () => {
     expect(config.network.wsUrl).toContain("testnet");
     expect(config.watchedMarkets).toEqual(["BTC", "ETH"]);
     expect(config.risk.maxOrderNotionalUsd).toBe("500");
+    expect(config.risk.maxDailyRealizedDrawdownUsd).toBe("50");
     expect(config.risk.enforceStopLossForEntries).toBe(false);
   });
 
@@ -41,6 +42,12 @@ describe("parseAppConfig", () => {
       VANTA_RISK_MAX_PRICE_DEVIATION_BPS: "90",
       VANTA_RISK_MAX_LEVERAGE_FRACTION_OF_EXCHANGE_MAX: "0.25",
       VANTA_RISK_DEFAULT_FRACTION_OF_ACCOUNT: "0.01",
+      VANTA_RISK_MAX_DAILY_REALIZED_DRAWDOWN_USD: "25",
+      VANTA_RISK_MAX_WEEKLY_REALIZED_DRAWDOWN_USD: "80",
+      VANTA_RISK_CONSECUTIVE_LOSS_COOLDOWN_COUNT: "4",
+      VANTA_RISK_CONSECUTIVE_LOSS_COOLDOWN_MINUTES: "45",
+      VANTA_RISK_MAX_ABSOLUTE_FUNDING_RATE: "0.0005",
+      VANTA_RISK_MIN_RATE_LIMIT_SURPLUS: "10",
       VANTA_RISK_ENFORCE_STOP_LOSS_FOR_ENTRIES: "true"
     });
 
@@ -51,6 +58,12 @@ describe("parseAppConfig", () => {
       maxPriceDeviationBps: 90,
       maxLeverageFractionOfExchangeMax: 0.25,
       defaultRiskFractionOfAccount: "0.01",
+      maxDailyRealizedDrawdownUsd: "25",
+      maxWeeklyRealizedDrawdownUsd: "80",
+      consecutiveLossCooldownCount: 4,
+      consecutiveLossCooldownMinutes: 45,
+      maxAbsoluteFundingRate: "0.0005",
+      minRateLimitSurplus: 10,
       enforceStopLossForEntries: true
     });
   });

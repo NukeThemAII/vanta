@@ -16,7 +16,9 @@ import type { OrderStateMachine } from "./order-state-machine.js";
 import type { AccountStateMirror } from "../portfolio/account-mirror.js";
 import type { OpenOrderMirror } from "./open-order-mirror.js";
 import type { AppEventRepository } from "../persistence/repositories/app-event-repository.js";
+import type { FillRepository } from "../persistence/repositories/fill-repository.js";
 import type { UserEventRepository } from "../persistence/repositories/user-event-repository.js";
+import { normalizeUserFills } from "../portfolio/fills.js";
 import {
   normalizeClearinghouseStateEvent,
   normalizeOpenOrdersEvent,
@@ -34,6 +36,7 @@ interface UserStateWsManagerOptions {
   readonly logger: Logger;
   readonly appEvents: AppEventRepository;
   readonly userEventRepository: UserEventRepository;
+  readonly fillRepository: FillRepository;
   readonly accountMirror: AccountStateMirror;
   readonly openOrderMirror: OpenOrderMirror;
   readonly orderStateMachine: OrderStateMachine;
@@ -208,6 +211,17 @@ export class UserStateWsManager {
     const normalizedRecords = normalizeUserFillsEvent(this.options.operatorAddress, event);
     const occurredAt = normalizedRecords[0]?.receivedAt ?? new Date().toISOString();
     this.options.userEventRepository.insertMany(normalizedRecords, this.options.bootId);
+    this.options.fillRepository.upsertMany(
+      normalizeUserFills({
+        operatorAddress: this.options.operatorAddress,
+        network: this.options.network,
+        registry,
+        fills: event.fills,
+        isSnapshot: event.isSnapshot === true,
+        recordedAt: occurredAt
+      }),
+      this.options.bootId
+    );
     this.options.orderStateMachine.applyUserFills({
       operatorAddress: this.options.operatorAddress,
       registry,

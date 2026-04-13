@@ -17,6 +17,7 @@ import { AppBootRepository } from "../persistence/repositories/app-boot-reposito
 import { AppEventRepository } from "../persistence/repositories/app-event-repository.js";
 import { CloidMappingRepository } from "../persistence/repositories/cloid-mapping-repository.js";
 import { ExecutionActionRepository } from "../persistence/repositories/execution-action-repository.js";
+import { FillRepository } from "../persistence/repositories/fill-repository.js";
 import { MarketEventRepository } from "../persistence/repositories/market-event-repository.js";
 import { OrderStateRepository } from "../persistence/repositories/order-state-repository.js";
 import { ReconciliationRepository } from "../persistence/repositories/reconciliation-repository.js";
@@ -40,6 +41,7 @@ export interface FoundationContainer {
   readonly runtimeStateRepository: RuntimeStateRepository;
   readonly appEventRepository: AppEventRepository;
   readonly userEventRepository: UserEventRepository;
+  readonly fillRepository: FillRepository;
   readonly riskEventRepository: RiskEventRepository;
   readonly reconciliationService: ReconciliationService;
   readonly runtimeTrustController: RuntimeTrustController;
@@ -60,6 +62,7 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
   const reconciliationRepository = new ReconciliationRepository(database.connection);
   const runtimeStateRepository = new RuntimeStateRepository(database.connection);
   const userEventRepository = new UserEventRepository(database.connection);
+  const fillRepository = new FillRepository(database.connection);
   const executionActionRepository = new ExecutionActionRepository(database.connection);
   const cloidMappingRepository = new CloidMappingRepository(database.connection);
   const orderStateRepository = new OrderStateRepository(database.connection);
@@ -78,6 +81,7 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
     stateSnapshotRepository,
     reconciliationRepository,
     orderStateRepository,
+    fillRepository,
     runtimeTrustController
   });
   const signerRegistry = new SignerRegistry(
@@ -102,6 +106,7 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
     logger: createComponentLogger(logger, "risk.risk-engine"),
     runtimeTrustController,
     orderStateRepository,
+    fillRepository,
     riskEventRepository,
     getAssetRegistry: () => reconciliationService.getAssetRegistry(),
     getAccountSnapshot: () =>
@@ -129,6 +134,7 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
     appEventRepository,
     marketEventRepository,
     userEventRepository,
+    fillRepository,
     exchangeClient,
     reconciliationService,
     runtimeTrustController,
@@ -146,6 +152,7 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
     runtimeStateRepository,
     appEventRepository,
     userEventRepository,
+    fillRepository,
     riskEventRepository,
     reconciliationService,
     runtimeTrustController,

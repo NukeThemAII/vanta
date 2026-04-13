@@ -40,6 +40,12 @@ export interface RiskConfig {
   readonly maxPriceDeviationBps: number;
   readonly maxLeverageFractionOfExchangeMax: number;
   readonly defaultRiskFractionOfAccount: string;
+  readonly maxDailyRealizedDrawdownUsd: string;
+  readonly maxWeeklyRealizedDrawdownUsd: string;
+  readonly consecutiveLossCooldownCount: number;
+  readonly consecutiveLossCooldownMinutes: number;
+  readonly maxAbsoluteFundingRate: string;
+  readonly minRateLimitSurplus: number;
   readonly enforceStopLossForEntries: boolean;
 }
 

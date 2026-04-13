@@ -20,7 +20,7 @@ export function evaluateLeverageLimit(args: {
   if (!args.isCross) {
     return {
       ok: false,
-      message: "Phase 4 leverage updates are restricted to cross margin",
+      message: "Cross-margin is required for leverage updates in MVP mode",
       maxAllowedLeverage: cappedExchangeLeverage
     };
   }

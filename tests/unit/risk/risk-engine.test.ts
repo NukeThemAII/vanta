@@ -10,9 +10,11 @@ import type { ExecutionIdentity, OrderStateRecord } from "../../../src/exchange/
 import { HyperliquidOrderFormatter } from "../../../src/exchange/order-formatter.js";
 import { SignerRegistry } from "../../../src/exchange/signer-registry.js";
 import { SqliteDatabase } from "../../../src/persistence/db.js";
+import { FillRepository } from "../../../src/persistence/repositories/fill-repository.js";
 import { OrderStateRepository } from "../../../src/persistence/repositories/order-state-repository.js";
 import { RiskEventRepository } from "../../../src/persistence/repositories/risk-event-repository.js";
 import type { AccountMirrorSnapshot } from "../../../src/portfolio/account-mirror.js";
+import type { FillRecord } from "../../../src/portfolio/fills.js";
 import { makeTestRegistry } from "../../fixtures/hyperliquid-fixtures.js";
 import { RiskEngine } from "../../../src/risk/risk-engine.js";
 import { RuntimeStateRepository } from "../../../src/persistence/repositories/runtime-state-repository.js";
@@ -52,7 +54,14 @@ describe("RiskEngine", () => {
   });
 
   it("caps entry size when stop-based sizing is enabled in cap mode", () => {
-    const fixture = buildFixture();
+    const fixture = buildFixture({
+      config: makeConfig({
+        risk: {
+          ...DEFAULT_RISK_CONFIG,
+          maxOrderNotionalUsd: "1000"
+        }
+      })
+    });
 
     const request = {
       marketSymbol: "BTC",
@@ -173,6 +182,168 @@ describe("RiskEngine", () => {
 
     fixture.db.close();
   });
+
+  it("rejects new exposure when daily drawdown is breached", () => {
+    const fixture = buildFixture();
+    fixture.fills.upsertMany([
+      makeFillRecord({ transactionId: 1, closedPnl: "-30", marketSymbol: "BTC", exchangeTimestampMs: Date.now() - 1_000 }),
+      makeFillRecord({ transactionId: 2, closedPnl: "-25", marketSymbol: "ETH", exchangeTimestampMs: Date.now() - 500 })
+    ]);
+
+    const request = {
+      marketSymbol: "BTC",
+      side: "buy" as const,
+      price: "68000",
+      size: "0.001",
+      timeInForce: "Alo" as const
+    };
+    const place = fixture.formatter.formatPlaceOrder(request);
+
+    expect(() =>
+      fixture.riskEngine.evaluatePlaceOrder({
+        identity: fixture.identity,
+        request,
+        order: place.order,
+        correlationId: place.correlationId
+      })
+    ).toThrow("Daily realized drawdown");
+
+    fixture.db.close();
+  });
+
+  it("rejects new exposure when consecutive-loss cooldown is active", () => {
+    const fixture = buildFixture();
+    const now = Date.now();
+    fixture.fills.upsertMany([
+      makeFillRecord({ transactionId: 1, closedPnl: "-10", marketSymbol: "BTC", exchangeTimestampMs: now - 30_000 }),
+      makeFillRecord({ transactionId: 2, closedPnl: "-8", marketSymbol: "BTC", exchangeTimestampMs: now - 20_000 }),
+      makeFillRecord({ transactionId: 3, closedPnl: "-5", marketSymbol: "BTC", exchangeTimestampMs: now - 10_000 })
+    ]);
+
+    const request = {
+      marketSymbol: "BTC",
+      side: "buy" as const,
+      price: "68000",
+      size: "0.001",
+      timeInForce: "Alo" as const
+    };
+    const place = fixture.formatter.formatPlaceOrder(request);
+
+    expect(() =>
+      fixture.riskEngine.evaluatePlaceOrder({
+        identity: fixture.identity,
+        request,
+        order: place.order,
+        correlationId: place.correlationId
+      })
+    ).toThrow("Consecutive-loss cooldown");
+
+    fixture.db.close();
+  });
+
+  it("rejects new exposure when funding is hostile", () => {
+    const fixture = buildFixture({
+      config: makeConfig({
+        risk: {
+          ...DEFAULT_RISK_CONFIG,
+          maxAbsoluteFundingRate: "0.00005"
+        }
+      })
+    });
+    const request = {
+      marketSymbol: "BTC",
+      side: "buy" as const,
+      price: "68000",
+      size: "0.001",
+      timeInForce: "Alo" as const
+    };
+    const place = fixture.formatter.formatPlaceOrder(request);
+
+    expect(() =>
+      fixture.riskEngine.evaluatePlaceOrder({
+        identity: fixture.identity,
+        request,
+        order: place.order,
+        correlationId: place.correlationId
+      })
+    ).toThrow("Funding rate");
+
+    fixture.db.close();
+  });
+
+  it("rejects new exposure when rate-limit surplus is too low", () => {
+    const fixture = buildFixture({
+      accountSnapshot: makeAccountSnapshot({
+        rateLimit: {
+          cumulativeVolume: "0",
+          requestsUsed: 995,
+          requestsCap: 1000,
+          requestsSurplus: 5
+        }
+      }),
+      config: makeConfig({
+        risk: {
+          ...DEFAULT_RISK_CONFIG,
+          maxAbsoluteFundingRate: "0.01",
+          minRateLimitSurplus: 10
+        }
+      })
+    });
+
+    const request = {
+      marketSymbol: "BTC",
+      side: "buy" as const,
+      price: "68000",
+      size: "0.001",
+      timeInForce: "Alo" as const
+    };
+    const place = fixture.formatter.formatPlaceOrder(request);
+
+    expect(() =>
+      fixture.riskEngine.evaluatePlaceOrder({
+        identity: fixture.identity,
+        request,
+        order: place.order,
+        correlationId: place.correlationId
+      })
+    ).toThrow("Rate-limit surplus");
+
+    fixture.db.close();
+  });
+
+  it("persists an approved decision for a valid small reduce-only order", () => {
+    const fixture = buildFixture({
+      config: makeConfig({
+        risk: {
+          ...DEFAULT_RISK_CONFIG,
+          maxAbsoluteFundingRate: "0.00005"
+        }
+      })
+    });
+    const request = {
+      marketSymbol: "BTC",
+      side: "sell" as const,
+      price: "68000",
+      size: "0.001",
+      reduceOnly: true,
+      timeInForce: "Alo" as const
+    };
+    const place = fixture.formatter.formatPlaceOrder(request);
+
+    const approved = fixture.riskEngine.evaluatePlaceOrder({
+      identity: fixture.identity,
+      request,
+      order: place.order,
+      correlationId: place.correlationId
+    });
+
+    expect(approved.size).toBe("0.001");
+    const latest = fixture.riskEvents.listRecent(1)[0];
+    expect(latest?.decision).toBe("approved");
+    expect(latest?.message).toContain("approved");
+
+    fixture.db.close();
+  });
 });
 
 function buildFixture(args?: {
@@ -184,6 +355,7 @@ function buildFixture(args?: {
   readonly formatter: HyperliquidOrderFormatter;
   readonly riskEngine: RiskEngine;
   readonly riskEvents: RiskEventRepository;
+  readonly fills: FillRepository;
   readonly orderStates: OrderStateRepository;
 } {
   const config = args?.config ?? makeConfig();
@@ -196,6 +368,7 @@ function buildFixture(args?: {
 
   const registry = makeTestRegistry();
   const riskEvents = new RiskEventRepository(db.connection);
+  const fills = new FillRepository(db.connection);
   const orderStates = new OrderStateRepository(db.connection);
 
   return {
@@ -207,16 +380,18 @@ function buildFixture(args?: {
       logger: pino({ level: "silent" }),
       runtimeTrustController,
       orderStateRepository: orderStates,
+      fillRepository: fills,
       riskEventRepository: riskEvents,
       getAssetRegistry: () => registry,
       getAccountSnapshot: () => args?.accountSnapshot ?? makeAccountSnapshot()
     }),
     riskEvents,
+    fills,
     orderStates
   };
 }
 
-function makeConfig(): AppConfig {
+function makeConfig(overrides?: Partial<AppConfig>): AppConfig {
   return {
     appEnv: "test",
     network: resolveNetworkConfig("testnet"),
@@ -228,7 +403,8 @@ function makeConfig(): AppConfig {
     apiWallet: {
       privateKey: `0x${"11".repeat(32)}`
     },
-    bootstrapUserState: true
+    bootstrapUserState: true,
+    ...overrides
   };
 }
 
@@ -259,6 +435,12 @@ function makeAccountSnapshot(
     withdrawable: "1000",
     positions: [],
     spotBalances: [],
+    rateLimit: {
+      cumulativeVolume: "0",
+      requestsUsed: 100,
+      requestsCap: 1000,
+      requestsSurplus: 900
+    },
     ...overrides
   };
 }
@@ -279,5 +461,37 @@ function makeActiveOrderRecord(index: number): OrderStateRecord {
     filledSize: "0",
     lastSource: "exchange_ack",
     updatedAt: `2026-04-13T15:00:${String(index).padStart(2, "0")}.000Z`
+  };
+}
+
+function makeFillRecord(args: {
+  readonly transactionId: number;
+  readonly closedPnl: string;
+  readonly marketSymbol: "BTC" | "ETH";
+  readonly exchangeTimestampMs: number;
+}): FillRecord {
+  const assetId = args.marketSymbol === "BTC" ? 0 : 1;
+  return {
+    fillKey: `0x1111111111111111111111111111111111111111:${args.transactionId}`,
+    operatorAddress: "0x1111111111111111111111111111111111111111",
+    network: "testnet",
+    recordedAt: new Date(args.exchangeTimestampMs).toISOString(),
+    exchangeTimestampMs: args.exchangeTimestampMs,
+    marketSymbol: args.marketSymbol,
+    assetId,
+    marketType: "perp",
+    orderId: args.transactionId,
+    transactionId: args.transactionId,
+    side: "buy",
+    price: args.marketSymbol === "BTC" ? "68000" : "3400",
+    size: "0.001",
+    startPosition: "0.001",
+    direction: "Open Long",
+    closedPnl: args.closedPnl,
+    fee: "0.1",
+    feeToken: "USDC",
+    hash: `0x${String(args.transactionId).padStart(64, "a")}`,
+    crossed: false,
+    isSnapshot: true
   };
 }

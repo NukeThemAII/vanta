@@ -12,6 +12,7 @@ import type { AppBootRepository } from "../persistence/repositories/app-boot-rep
 import type { AppEventRepository } from "../persistence/repositories/app-event-repository.js";
 import type { MarketEventRepository } from "../persistence/repositories/market-event-repository.js";
 import type { UserEventRepository } from "../persistence/repositories/user-event-repository.js";
+import type { FillRepository } from "../persistence/repositories/fill-repository.js";
 import type { ReconciliationService } from "./reconciliation-service.js";
 import type { RuntimeTrustController } from "./runtime-trust-controller.js";
 
@@ -23,6 +24,7 @@ interface FoundationServiceOptions {
   readonly appEventRepository: AppEventRepository;
   readonly marketEventRepository: MarketEventRepository;
   readonly userEventRepository: UserEventRepository;
+  readonly fillRepository: FillRepository;
   readonly exchangeClient: HyperliquidClient;
   readonly reconciliationService: ReconciliationService;
   readonly runtimeTrustController: RuntimeTrustController;
@@ -108,6 +110,7 @@ export class FoundationService {
         logger: this.options.logger.child({ module: "exchange.user-state-ws-manager" }),
         appEvents: this.options.appEventRepository,
         userEventRepository: this.options.userEventRepository,
+        fillRepository: this.options.fillRepository,
         accountMirror: this.options.reconciliationService.getAccountMirror(),
         openOrderMirror: this.options.reconciliationService.getOpenOrderMirror(),
         orderStateMachine: this.options.orderStateMachine,

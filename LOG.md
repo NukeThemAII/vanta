@@ -395,3 +395,91 @@ Execute the next bounded Phase 4 slice only:
 3. Finish the remaining Phase 4 guards: drawdown stops, consecutive-loss cooldowns, funding-based entry blocking, and rate-limit / stale-market-data protection.
 4. Add a minimal risk-event/operator inspection test around real persisted decisions after a write-side smoke run so the next phase inherits hard evidence, not assumptions.
 5. Only after Phase 4 is complete should the next agent move into Phase 5 strategy runtime and the first `trend-pullback-v1` intent pipeline.
+
+## 2026-04-13T15:58:15Z
+
+### Objective
+Continue from the updated post-Phase-4 audit and execute the next bounded Phase 4 slice only:
+- add a restart-safe fill ledger
+- persist recent Hyperliquid user fills during reconciliation and live user streams
+- implement temporal risk guards for drawdown and consecutive-loss cooldowns
+- implement funding and rate-limit headroom guards
+- expand operator risk-state visibility
+
+### Files created/changed
+- `LOG.md`
+- `.env.example`
+- `src/app/container.ts`
+- `src/cli/show-risk-state.ts`
+- `src/config/env.ts`
+- `src/config/risk.ts`
+- `src/core/types.ts`
+- `src/exchange/hyperliquid-client.ts`
+- `src/exchange/user-state-ws-manager.ts`
+- `src/persistence/schema.ts`
+- `src/persistence/repositories/fill-repository.ts`
+- `src/portfolio/fills.ts`
+- `src/risk/risk-engine.ts`
+- `src/risk/guards/cooldown.ts`
+- `src/risk/guards/drawdown.ts`
+- `src/risk/guards/funding.ts`
+- `src/risk/guards/leverage.ts`
+- `src/risk/guards/rate-limit.ts`
+- `src/services/foundation-service.ts`
+- `src/services/reconciliation-service.ts`
+- `tests/unit/config/env.test.ts`
+- `tests/unit/persistence/fill-repository.test.ts`
+- `tests/unit/risk/risk-engine.test.ts`
+
+### What works now
+- I agree with the updated `AUDIT.md` in the important ways: the repo was already on the right track, and the next valuable work was still Phase 4 completion rather than jumping to strategies or Telegram. This session addressed the highest-signal remaining Phase 4 items the audit called out.
+- The bot now has a dedicated persisted fill ledger:
+  - `fill_records` table
+  - `FillRepository` with upsert, recent-fill queries, realized-PnL summation, and consecutive-loss streak queries
+  - canonical normalized fill records in `src/portfolio/fills.ts`
+- Reconciliation now fetches recent user fills from Hyperliquid using `userFillsByTime()` and persists them locally, so realized PnL and cooldown logic survive restarts instead of depending only on live WebSocket memory.
+- Live `userFills` WebSocket events now also persist into `fill_records` through `UserStateWsManager`.
+- The risk engine now includes the next set of mandatory Phase 4 guards for new non-reduce-only exposure:
+  - rate-limit headroom guard
+  - daily realized-drawdown guard
+  - weekly realized-drawdown guard
+  - consecutive-loss cooldown guard
+  - funding-threshold guard
+- The guard order in `evaluatePlaceOrder()` was improved in the direction the audit recommended: cheaper/account-state checks run before heavier stop-sizing logic.
+- The leverage guard message was corrected from a phase-specific string to policy language: cross margin is required for leverage updates in MVP mode.
+- `state:risk` now shows more than raw config. It prints:
+  - trust state
+  - account/open-order snapshot summary
+  - realized daily/weekly closed PnL from persisted fills
+  - recent fills
+  - recent risk decisions
+- Verified in this session:
+  - `corepack pnpm typecheck`
+  - `corepack pnpm test`
+  - `corepack pnpm lint`
+  - `corepack pnpm build`
+  - `env VANTA_NETWORK=testnet VANTA_OPERATOR_ADDRESS=0x1111111111111111111111111111111111111111 VANTA_SQLITE_PATH=./data/vanta-phase4b-reconcile.sqlite corepack pnpm reconcile:run`
+  - `env VANTA_NETWORK=testnet VANTA_OPERATOR_ADDRESS=0x1111111111111111111111111111111111111111 VANTA_SQLITE_PATH=./data/vanta-phase4b-reconcile.sqlite corepack pnpm state:risk`
+- The read-side recovery path still reconciles cleanly after the new fill-history wiring. The verified manual reconcile run completed with `trustStateAfter=trusted` and `issueCount=0`.
+
+### Known issues / blockers
+- The most important unresolved operational item from the audit remains unchanged: there is still no funded real-credential testnet `smoke:execution --allow-write-actions ...` run through the risk-gated write path.
+- Phase 4 is stronger now, but not fully complete yet. Remaining risk/hardening gaps include:
+  - stale-market-data / book-quality guard
+  - a WebSocket silence watchdog that degrades trust when user/order updates go quiet
+  - more explicit operator reporting around live risk rejections
+- The new drawdown/cooldown logic is fill-ledger based. That is correct and restart-safe, but there is still no higher-level trade/PnL service or dedicated `fills -> realized trade outcomes` aggregation layer yet.
+- There is still no migration framework or retention policy. `fill_records`, `market_events`, `user_event_records`, and `order_state_transitions` will continue to grow until a housekeeping phase is implemented.
+- There is still no batch cancel/modify, no candle recorder, no paper mode, no Telegram plane, and no strategy runtime. Those remain out of scope until Phase 4 is truly done.
+
+### Exact next steps for the next agent session
+1. Stay inside Phase 4 only. Do not start strategies, Telegram, backtesting, dashboards, or paper mode yet.
+2. Run one funded testnet `smoke:execution --allow-write-actions ...` cycle against the now-expanded risk engine and inspect:
+   - `execution_actions`
+   - `risk_event_records`
+   - `fill_records`
+   - `cloid_mappings`
+   - `order_state_transitions`
+3. Add the remaining Phase 4 stale-market-data / WebSocket-silence protection so runtime trust degrades automatically when the live signal path becomes uncertain.
+4. Add a basic retention/cleanup service for `market_events`, `user_event_records`, `fill_records`, and `order_state_transitions` before any sustained soak run.
+5. Only after those are in place should the next agent move on to Phase 5 strategy runtime and the first typed intent pipeline.
