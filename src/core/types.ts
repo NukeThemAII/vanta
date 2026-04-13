@@ -33,11 +33,22 @@ export interface ApiWalletConfig {
   readonly privateKey: Hex;
 }
 
+export interface RiskConfig {
+  readonly maxOrderNotionalUsd: string;
+  readonly maxOpenOrders: number;
+  readonly maxConcurrentPositions: number;
+  readonly maxPriceDeviationBps: number;
+  readonly maxLeverageFractionOfExchangeMax: number;
+  readonly defaultRiskFractionOfAccount: string;
+  readonly enforceStopLossForEntries: boolean;
+}
+
 export interface AppConfig {
   readonly appEnv: AppEnvironment;
   readonly network: NetworkConfig;
   readonly logLevel: LogLevel;
   readonly sqlitePath: string;
+  readonly risk: RiskConfig;
   readonly watchedMarkets: readonly FoundationMarket[];
   readonly operatorAddress?: Address;
   readonly apiWallet?: ApiWalletConfig;

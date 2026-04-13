@@ -89,6 +89,15 @@ export function isPositiveDecimal(value: string): boolean {
   return compareDecimalStrings(value, "0") === 1;
 }
 
+export function absDecimalString(value: string): string {
+  const normalized = normalizeDecimalString(value);
+  return normalized.startsWith("-") ? normalized.slice(1) : normalized;
+}
+
+export function minDecimalStrings(left: string, right: string): string {
+  return compareDecimalStrings(left, right) <= 0 ? normalizeDecimalString(left) : normalizeDecimalString(right);
+}
+
 interface ParsedDecimal {
   readonly sign: 1 | -1;
   readonly digits: bigint;

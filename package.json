@@ -18,6 +18,7 @@
     "smoke:execution": "tsx src/cli/testnet-smoke.ts",
     "state:account": "tsx src/cli/show-account-state.ts",
     "state:orders": "tsx src/cli/show-open-orders.ts",
+    "state:risk": "tsx src/cli/show-risk-state.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

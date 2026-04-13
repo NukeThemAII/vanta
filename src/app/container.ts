@@ -20,9 +20,11 @@ import { ExecutionActionRepository } from "../persistence/repositories/execution
 import { MarketEventRepository } from "../persistence/repositories/market-event-repository.js";
 import { OrderStateRepository } from "../persistence/repositories/order-state-repository.js";
 import { ReconciliationRepository } from "../persistence/repositories/reconciliation-repository.js";
+import { RiskEventRepository } from "../persistence/repositories/risk-event-repository.js";
 import { RuntimeStateRepository } from "../persistence/repositories/runtime-state-repository.js";
 import { StateSnapshotRepository } from "../persistence/repositories/state-snapshot-repository.js";
 import { UserEventRepository } from "../persistence/repositories/user-event-repository.js";
+import { RiskEngine } from "../risk/risk-engine.js";
 import { FoundationService } from "../services/foundation-service.js";
 import { ReconciliationService } from "../services/reconciliation-service.js";
 import { RuntimeTrustController } from "../services/runtime-trust-controller.js";
@@ -38,10 +40,12 @@ export interface FoundationContainer {
   readonly runtimeStateRepository: RuntimeStateRepository;
   readonly appEventRepository: AppEventRepository;
   readonly userEventRepository: UserEventRepository;
+  readonly riskEventRepository: RiskEventRepository;
   readonly reconciliationService: ReconciliationService;
   readonly runtimeTrustController: RuntimeTrustController;
   readonly signerRegistry: SignerRegistry;
   readonly orderStateMachine: OrderStateMachine;
+  readonly riskEngine: RiskEngine;
   readonly executionEngine: ExecutionEngine;
   readonly foundationService: FoundationService;
 }
@@ -59,6 +63,7 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
   const executionActionRepository = new ExecutionActionRepository(database.connection);
   const cloidMappingRepository = new CloidMappingRepository(database.connection);
   const orderStateRepository = new OrderStateRepository(database.connection);
+  const riskEventRepository = new RiskEventRepository(database.connection);
   const exchangeLogger = createComponentLogger(logger, "exchange.hyperliquid-client");
   const exchangeClient = new HyperliquidClient(config, exchangeLogger);
   const runtimeTrustController = new RuntimeTrustController(
@@ -72,6 +77,7 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
     assetRegistryRepository,
     stateSnapshotRepository,
     reconciliationRepository,
+    orderStateRepository,
     runtimeTrustController
   });
   const signerRegistry = new SignerRegistry(
@@ -91,9 +97,21 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
     orderStateRepository,
     createComponentLogger(logger, "exchange.order-state-machine")
   );
+  const riskEngine = new RiskEngine({
+    config,
+    logger: createComponentLogger(logger, "risk.risk-engine"),
+    runtimeTrustController,
+    orderStateRepository,
+    riskEventRepository,
+    getAssetRegistry: () => reconciliationService.getAssetRegistry(),
+    getAccountSnapshot: () =>
+      reconciliationService.getAccountMirror().getSnapshot()
+      ?? reconciliationService.getLatestPersistedAccountSnapshot()
+  });
   const executionEngine = new ExecutionEngine({
     logger: createComponentLogger(logger, "exchange.execution-engine"),
     gate: executionGate,
+    riskEngine,
     formatter: new HyperliquidOrderFormatter(() => reconciliationService.getAssetRegistry(), cloidService),
     exchangeClient: executionWriteClient,
     readClient: exchangeClient,
@@ -128,10 +146,12 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
     runtimeStateRepository,
     appEventRepository,
     userEventRepository,
+    riskEventRepository,
     reconciliationService,
     runtimeTrustController,
     signerRegistry,
     orderStateMachine,
+    riskEngine,
     executionEngine,
     foundationService
   };

@@ -16,6 +16,13 @@ export interface TriggerOrderRequest {
   readonly kind: TriggerKind;
 }
 
+export interface EntryRiskRequest {
+  readonly stopLossPrice?: NumericInput;
+  readonly maxRiskFractionOfAccount?: NumericInput;
+  readonly maxRiskUsd?: NumericInput;
+  readonly sizingMode?: "reject" | "cap";
+}
+
 export interface PlaceOrderRequest {
   readonly marketSymbol: string;
   readonly side: ExecutionOrderSide;
@@ -27,6 +34,7 @@ export interface PlaceOrderRequest {
   readonly grouping?: OrderGrouping;
   readonly correlationId?: string;
   readonly clientOrderId?: Hex;
+  readonly risk?: EntryRiskRequest;
 }
 
 export type OrderReference =

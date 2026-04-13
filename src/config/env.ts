@@ -8,6 +8,7 @@ import { ConfigurationError } from "../core/errors.js";
 import type { AppConfig, AppEnvironment, LogLevel, NetworkName } from "../core/types.js";
 import { deduplicateMarkets, FOUNDATION_MARKETS, FoundationMarketSchema } from "./markets.js";
 import { resolveNetworkConfig } from "./networks.js";
+import { DEFAULT_RISK_CONFIG } from "./risk.js";
 
 const APP_ENV_SCHEMA = z.enum(["development", "test", "production"]);
 const NETWORK_SCHEMA = z.enum(["testnet", "mainnet"]);
@@ -77,6 +78,56 @@ const booleanish = (defaultValue: boolean) =>
     z.boolean()
   );
 
+const positiveInteger = (defaultValue: number) =>
+  z.preprocess(
+    (value) => {
+      const normalized = blankToUndefined(value);
+      if (normalized === undefined) {
+        return defaultValue;
+      }
+      if (typeof normalized === "number") {
+        return normalized;
+      }
+      if (typeof normalized === "string") {
+        return Number(normalized);
+      }
+      return normalized;
+    },
+    z.number().int().positive()
+  );
+
+const positiveNumber = (defaultValue: number, upperBound?: number) =>
+  z.preprocess(
+    (value) => {
+      const normalized = blankToUndefined(value);
+      if (normalized === undefined) {
+        return defaultValue;
+      }
+      if (typeof normalized === "number") {
+        return normalized;
+      }
+      if (typeof normalized === "string") {
+        return Number(normalized);
+      }
+      return normalized;
+    },
+    upperBound === undefined
+      ? z.number().positive()
+      : z.number().positive().max(upperBound)
+  );
+
+const positiveDecimalString = (defaultValue: string) =>
+  z.preprocess(
+    (value) => {
+      const normalized = blankToUndefined(value);
+      return normalized === undefined ? defaultValue : normalized;
+    },
+    z
+      .string()
+      .regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/, "must be a positive decimal string")
+      .refine((value) => Number(value) > 0, "must be greater than zero")
+  );
+
 const ENV_SCHEMA = z.object({
   VANTA_APP_ENV: z.preprocess(blankToUndefined, APP_ENV_SCHEMA.default("development")),
   VANTA_NETWORK: z.preprocess(blankToUndefined, NETWORK_SCHEMA.default("testnet")),
@@ -89,7 +140,17 @@ const ENV_SCHEMA = z.object({
   VANTA_OPERATOR_ADDRESS: z.preprocess(blankToUndefined, ADDRESS_SCHEMA.optional()),
   VANTA_API_WALLET_PRIVATE_KEY: z.preprocess(blankToUndefined, PRIVATE_KEY_SCHEMA.optional()),
   VANTA_VAULT_ADDRESS: z.preprocess(blankToUndefined, ADDRESS_SCHEMA.optional()),
-  VANTA_BOOTSTRAP_USER_STATE: booleanish(true)
+  VANTA_BOOTSTRAP_USER_STATE: booleanish(true),
+  VANTA_RISK_MAX_ORDER_NOTIONAL_USD: positiveDecimalString(DEFAULT_RISK_CONFIG.maxOrderNotionalUsd),
+  VANTA_RISK_MAX_OPEN_ORDERS: positiveInteger(DEFAULT_RISK_CONFIG.maxOpenOrders),
+  VANTA_RISK_MAX_CONCURRENT_POSITIONS: positiveInteger(DEFAULT_RISK_CONFIG.maxConcurrentPositions),
+  VANTA_RISK_MAX_PRICE_DEVIATION_BPS: positiveInteger(DEFAULT_RISK_CONFIG.maxPriceDeviationBps),
+  VANTA_RISK_MAX_LEVERAGE_FRACTION_OF_EXCHANGE_MAX: positiveNumber(
+    DEFAULT_RISK_CONFIG.maxLeverageFractionOfExchangeMax,
+    1
+  ),
+  VANTA_RISK_DEFAULT_FRACTION_OF_ACCOUNT: positiveDecimalString(DEFAULT_RISK_CONFIG.defaultRiskFractionOfAccount),
+  VANTA_RISK_ENFORCE_STOP_LOSS_FOR_ENTRIES: booleanish(DEFAULT_RISK_CONFIG.enforceStopLossForEntries)
 });
 
 type ParsedEnvironment = z.infer<typeof ENV_SCHEMA>;
@@ -111,6 +172,15 @@ function buildAppConfig(parsed: ParsedEnvironment): AppConfig {
     network,
     logLevel: parsed.VANTA_LOG_LEVEL as LogLevel,
     sqlitePath: resolvePath(process.cwd(), parsed.VANTA_SQLITE_PATH),
+    risk: {
+      maxOrderNotionalUsd: parsed.VANTA_RISK_MAX_ORDER_NOTIONAL_USD,
+      maxOpenOrders: parsed.VANTA_RISK_MAX_OPEN_ORDERS,
+      maxConcurrentPositions: parsed.VANTA_RISK_MAX_CONCURRENT_POSITIONS,
+      maxPriceDeviationBps: parsed.VANTA_RISK_MAX_PRICE_DEVIATION_BPS,
+      maxLeverageFractionOfExchangeMax: parsed.VANTA_RISK_MAX_LEVERAGE_FRACTION_OF_EXCHANGE_MAX,
+      defaultRiskFractionOfAccount: parsed.VANTA_RISK_DEFAULT_FRACTION_OF_ACCOUNT,
+      enforceStopLossForEntries: parsed.VANTA_RISK_ENFORCE_STOP_LOSS_FOR_ENTRIES
+    },
     watchedMarkets: parsed.VANTA_MARKETS,
     ...(parsed.VANTA_OPERATOR_ADDRESS !== undefined
       ? { operatorAddress: parsed.VANTA_OPERATOR_ADDRESS }

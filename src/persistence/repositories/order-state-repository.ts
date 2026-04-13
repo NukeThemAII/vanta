@@ -30,6 +30,7 @@ export class OrderStateRepository {
   private readonly getByOrderKeyStatement: Database.Statement<[string], OrderStateRow>;
   private readonly getByOrderIdStatement: Database.Statement<[number], OrderStateRow>;
   private readonly getByClientOrderIdStatement: Database.Statement<[string], OrderStateRow>;
+  private readonly listActiveOrdersStatement: Database.Statement<[string], OrderStateRow>;
 
   constructor(private readonly db: Database.Database) {
     this.upsertStateStatement = this.db.prepare(`
@@ -146,6 +147,14 @@ export class OrderStateRepository {
       WHERE client_order_id = ?
       LIMIT 1
     `);
+
+    this.listActiveOrdersStatement = this.db.prepare(`
+      SELECT *
+      FROM order_state_records
+      WHERE operator_address = ?
+        AND state NOT IN ('filled', 'canceled', 'rejected')
+      ORDER BY updated_at DESC, order_key ASC
+    `);
   }
 
   upsertState(record: OrderStateRecord): void {
@@ -203,6 +212,12 @@ export class OrderStateRepository {
   getByClientOrderId(clientOrderId: string): OrderStateRecord | undefined {
     const row = this.getByClientOrderIdStatement.get(clientOrderId);
     return row === undefined ? undefined : hydrateOrderStateRecord(row);
+  }
+
+  listActiveOrders(operatorAddress: string): readonly OrderStateRecord[] {
+    return this.listActiveOrdersStatement
+      .all(operatorAddress)
+      .map((row) => hydrateOrderStateRecord(row));
   }
 }
 

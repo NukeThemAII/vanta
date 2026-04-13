@@ -28,10 +28,12 @@ import type {
 } from "./execution-types.js";
 import type { OrderStateMachine } from "./order-state-machine.js";
 import type { ReconciliationService } from "../services/reconciliation-service.js";
+import type { RiskEngine } from "../risk/risk-engine.js";
 
 interface ExecutionEngineOptions {
   readonly logger: Logger;
   readonly gate: ExecutionGate;
+  readonly riskEngine: RiskEngine;
   readonly formatter: HyperliquidOrderFormatter;
   readonly exchangeClient: ExecutionExchangeClient;
   readonly readClient: HyperliquidClient;
@@ -53,7 +55,15 @@ export class ExecutionEngine {
     readonly response: unknown;
   }> {
     const identity = this.options.gate.requireWriteAccess("place_order");
-    const { correlationId, order } = this.options.formatter.formatPlaceOrder(request);
+    const formatted = this.options.formatter.formatPlaceOrder(request);
+    const order = this.options.riskEngine.evaluatePlaceOrder({
+      identity,
+      request,
+      order: formatted.order,
+      correlationId: formatted.correlationId,
+      ...(bootId !== undefined ? { bootId } : {})
+    });
+    const { correlationId } = formatted;
     const actionId = randomUUID();
 
     const action = this.insertQueuedAction({
@@ -270,7 +280,14 @@ export class ExecutionEngine {
     readonly response: unknown;
   }> {
     const identity = this.options.gate.requireWriteAccess("modify_order");
-    const { modify } = this.options.formatter.formatModifyOrder(request);
+    const formatted = this.options.formatter.formatModifyOrder(request);
+    this.options.riskEngine.evaluateModifyOrder({
+      identity,
+      modify: formatted.modify,
+      correlationId: formatted.correlationId,
+      ...(bootId !== undefined ? { bootId } : {})
+    });
+    const { modify } = formatted;
     const actionId = randomUUID();
     const action = this.insertQueuedAction({
       actionId,
@@ -314,6 +331,11 @@ export class ExecutionEngine {
   }> {
     const identity = this.options.gate.requireWriteAccess("update_leverage");
     const leverage = this.options.formatter.formatUpdateLeverage(request);
+    this.options.riskEngine.evaluateLeverageUpdate({
+      identity,
+      leverage,
+      ...(bootId !== undefined ? { bootId } : {})
+    });
     const actionId = randomUUID();
     const action = this.insertQueuedAction({
       actionId,
@@ -583,8 +605,14 @@ function mapFormattedModifyToSdk(modify: {
   };
   readonly order: FormattedOrderRequest;
 }): ModifyParameters {
+  const identifier = modify.target.clientOrderId ?? modify.target.orderId;
+
+  if (identifier === undefined) {
+    throw new ExecutionError("Modify requests require either a clientOrderId or an orderId");
+  }
+
   return {
-    oid: modify.target.clientOrderId ?? modify.target.orderId ?? -1,
+    oid: identifier,
     order: mapFormattedOrderToSdk(modify.order)
   };
 }

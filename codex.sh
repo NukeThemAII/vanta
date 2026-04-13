@@ -1,1 +1,2 @@
-codex resume 019d5990-83b4-7411-af3d-1d6599d03959
+codex resume 019d5990-83b4-7411-af3d-1d6599d03959 --full-auto
+

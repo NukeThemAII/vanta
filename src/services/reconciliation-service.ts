@@ -9,6 +9,7 @@ import {
 import type { AssetRegistrySnapshot } from "../exchange/asset-registry.js";
 import {
   determineTrustStateAfterReconciliation,
+  diffActiveOrderStatesAgainstOpenOrders,
   diffAccountSnapshots,
   diffAssetRegistry,
   diffOpenOrderSnapshots,
@@ -23,6 +24,7 @@ import {
 } from "../exchange/open-order-mirror.js";
 import type { OpenOrderStateSnapshot } from "../exchange/open-order-mirror.js";
 import type { HyperliquidClient } from "../exchange/hyperliquid-client.js";
+import type { OrderStateRecord } from "../exchange/execution-types.js";
 import {
   AccountStateMirror,
   normalizeAccountSnapshot
@@ -33,6 +35,7 @@ import {
   type ReconciliationRunRecord,
   type ReconciliationRepository
 } from "../persistence/repositories/reconciliation-repository.js";
+import type { OrderStateRepository } from "../persistence/repositories/order-state-repository.js";
 import type { StateSnapshotRepository } from "../persistence/repositories/state-snapshot-repository.js";
 import type { RuntimeTrustController } from "./runtime-trust-controller.js";
 
@@ -55,6 +58,7 @@ interface ReconciliationServiceOptions {
   readonly assetRegistryRepository: AssetRegistryRepository;
   readonly stateSnapshotRepository: StateSnapshotRepository;
   readonly reconciliationRepository: ReconciliationRepository;
+  readonly orderStateRepository: OrderStateRepository;
   readonly runtimeTrustController: RuntimeTrustController;
 }
 
@@ -198,7 +202,11 @@ export class ReconciliationService {
         previousAccount,
         currentAccount: accountSnapshot,
         previousOpenOrders,
-        currentOpenOrders: openOrderSnapshot
+        currentOpenOrders: openOrderSnapshot,
+        localActiveOrderStates:
+          this.options.config.operatorAddress !== undefined
+            ? this.options.orderStateRepository.listActiveOrders(this.options.config.operatorAddress)
+            : []
       });
 
       const summary = summarizeReconciliationIssues(issues);
@@ -294,6 +302,7 @@ function buildReconciliationIssues(args: {
   readonly currentAccount: AccountMirrorSnapshot | undefined;
   readonly previousOpenOrders: OpenOrderStateSnapshot | undefined;
   readonly currentOpenOrders: OpenOrderStateSnapshot | undefined;
+  readonly localActiveOrderStates: readonly OrderStateRecord[];
 }): ReconciliationIssue[] {
   const issues: ReconciliationIssue[] = [];
 
@@ -324,6 +333,7 @@ function buildReconciliationIssues(args: {
 
   if (args.currentOpenOrders !== undefined) {
     issues.push(...diffOpenOrderSnapshots(args.previousOpenOrders, args.currentOpenOrders));
+    issues.push(...diffActiveOrderStatesAgainstOpenOrders(args.localActiveOrderStates, args.currentOpenOrders));
   } else {
     issues.push({
       severity: "error",

@@ -256,3 +256,142 @@ Execute Phase 3 / Write-Side Execution Foundation only:
 3. Build the risk engine on top of the new execution foundation: per-trade sizing from stop distance, exposure/leverage caps, stale-state guard, spread/slippage guard, and cooldown/drawdown stops.
 4. Make the risk engine the mandatory authority between future strategy intents and `ExecutionEngine`; no future strategy module should call write-side execution directly.
 5. Add tests for risk rejection/transform rules and for write-path blocking when account state becomes stale, degraded, or materially unreconciled after startup.
+
+## 2026-04-13T15:10:07Z
+
+### Objective
+Review `AUDIT.md`, verify the findings against the actual codebase, and fix the audit-backed defects that belong to the already-completed phases without jumping ahead into Phase 4+ feature work.
+
+### Files created/changed
+- `LOG.md`
+- `src/app/container.ts`
+- `src/exchange/execution-engine.ts`
+- `src/exchange/reconciliation.ts`
+- `src/persistence/repositories/order-state-repository.ts`
+- `src/services/reconciliation-service.ts`
+- `tests/unit/exchange/open-order-reconciliation.test.ts`
+- `tests/unit/persistence/order-state-repository.test.ts`
+
+### What works now
+- Reviewed `AUDIT.md` and I agree with most of it. The major red items around risk engine, strategies, intent layer, candle recorder, Telegram, systemd, paper mode, and metrics are real gaps, but they are still Phase 4–7 scope gaps rather than defects in the completed Phase 1–3 work.
+- Fixed the audit’s concrete write-path defect in `ExecutionEngine`: `mapFormattedModifyToSdk` no longer falls back to `oid = -1`. Modify translation now throws immediately if neither `clientOrderId` nor `orderId` is present.
+- Added `OrderStateRepository.listActiveOrders(operatorAddress)` so the codebase can query non-terminal local order states directly. This closes the repository gap the audit called out and prepares the risk engine / operator tooling for active-order inspection.
+- Tightened reconciliation so it now compares local non-terminal `order_state_records` against the exchange’s authoritative open-order snapshot. Reconciliation now raises explicit errors for:
+  - local active orders missing on the exchange
+  - exchange open orders missing from local order-state records
+- Tightened account drift policy for positions: position additions/removals/changes are now reconciled as `error` severity, not `warn`, which means unexpected position drift can push runtime trust to `untrusted`.
+- Added regression coverage for the new reconciliation and repository behavior:
+  - active-order repository queries
+  - local-vs-exchange open-order drift detection
+  - position drift severity escalation
+- Verified in this session:
+  - `corepack pnpm typecheck`
+  - `corepack pnpm test`
+  - `corepack pnpm lint`
+  - `corepack pnpm build`
+  - `env VANTA_NETWORK=testnet VANTA_OPERATOR_ADDRESS=0x1111111111111111111111111111111111111111 VANTA_SQLITE_PATH=./data/vanta-audit-reconcile.sqlite corepack pnpm reconcile:run`
+- The audited reconciliation changes were confirmed live against testnet; the verified manual reconcile run completed with `trustStateAfter=trusted` and `issueCount=0`.
+
+### Known issues / blockers
+- The audit is correct that a full real-credential `smoke:execution --allow-write-actions` cycle is still missing. That remains the most important unresolved verification item before risk-engine work depends on the write path.
+- The audit is also correct that there is still no migration framework, no retention/housekeeping service, no candle recorder, no fills table, no batch cancel/modify, no paper mode, and no systemd/Telegram/metrics layer yet. Those are still open.
+- `ExecutionGate` is still deliberately hardlocked to `testnet` for the completed Phase 3 work. That is correct for now, but it will need to become an explicit capability flag before any mainnet readiness work.
+
+### Exact next steps for the next agent session
+1. Stay inside Phase 4 only: build the risk engine and its guards, not strategies or Telegram yet.
+2. Before relying on write-side behavior for risk decisions, run one funded testnet `smoke:execution --allow-write-actions` cycle and inspect `execution_actions`, `cloid_mappings`, `order_state_records`, and `order_state_transitions`.
+3. Build `src/risk/` as the mandatory gate in front of `ExecutionEngine`, starting with per-trade sizing from stop distance, max notional / leverage caps, stale-state blocking, and spread/slippage guards.
+4. Use the new `listActiveOrders()` query and stricter reconciliation results inside the risk engine so active-order count and state-trust checks are authoritative.
+5. After the risk engine lands, the next highest-priority hardening item from the audit is the candle/book/trade recorder and a basic retention policy for `market_events`, `user_event_records`, and `order_state_transitions`.
+
+## 2026-04-13T15:33:12Z
+
+### Objective
+Execute the next bounded Phase 4 slice only:
+- add validated risk configuration
+- build a centralized risk engine in front of write-side execution
+- add exposure/leverage/slippage/stale-state guards
+- persist inspectable risk decisions
+- add a read-only operator command for current risk state
+
+### Files created/changed
+- `LOG.md`
+- `package.json`
+- `.env.example`
+- `src/app/container.ts`
+- `src/config/env.ts`
+- `src/config/risk.ts`
+- `src/core/decimal.ts`
+- `src/core/errors.ts`
+- `src/core/types.ts`
+- `src/exchange/execution-engine.ts`
+- `src/exchange/execution-types.ts`
+- `src/persistence/schema.ts`
+- `src/persistence/repositories/risk-event-repository.ts`
+- `src/risk/types.ts`
+- `src/risk/risk-engine.ts`
+- `src/risk/guards/exposure.ts`
+- `src/risk/guards/leverage.ts`
+- `src/risk/guards/slippage.ts`
+- `src/risk/guards/stale-state.ts`
+- `src/cli/show-risk-state.ts`
+- `tests/unit/config/env.test.ts`
+- `tests/unit/exchange/execution-gate.test.ts`
+- `tests/unit/risk/risk-engine.test.ts`
+
+### What works now
+- Risk config is now first-class and validated from env. The bot can parse and validate:
+  - max order notional
+  - max open orders
+  - max concurrent positions
+  - aggressive price deviation in bps
+  - leverage cap as a fraction of exchange max leverage
+  - default risk fraction of account
+  - optional stop-loss enforcement for new exposure
+- `RiskEngine` now sits directly in front of `ExecutionEngine` for:
+  - `place_order`
+  - `modify_order`
+  - `update_leverage`
+- New write-side risk guards are implemented and persisted:
+  - fresh-account-state guard
+  - max-open-orders guard
+  - max-concurrent-positions guard
+  - max-order-notional guard
+  - aggressive-price-deviation/slippage guard
+  - leverage-cap / cross-only guard
+- Place orders now support optional risk metadata through `PlaceOrderRequest.risk`, including stop-loss-aware sizing inputs. The engine can:
+  - reject oversize entries against a stop-based risk budget, or
+  - cap size deterministically when `sizingMode: "cap"` is requested
+- Risk decisions are persisted in the new `risk_event_records` table with decision type, market context, trust state, and structured details for later inspection.
+- Added `pnpm state:risk`, a read-only CLI that prints:
+  - current runtime trust state
+  - active risk config
+  - latest persisted account/open-order snapshot summary
+  - recent risk decisions
+- Verified in this session:
+  - `corepack pnpm typecheck`
+  - `corepack pnpm test`
+  - `corepack pnpm lint`
+  - `corepack pnpm build`
+  - `env VANTA_SQLITE_PATH=./data/vanta-risk-state.sqlite corepack pnpm state:risk`
+  - `env VANTA_NETWORK=testnet VANTA_OPERATOR_ADDRESS=0x1111111111111111111111111111111111111111 VANTA_SQLITE_PATH=./data/vanta-phase4-reconcile.sqlite corepack pnpm reconcile:run`
+  - `env VANTA_NETWORK=testnet VANTA_OPERATOR_ADDRESS=0x1111111111111111111111111111111111111111 VANTA_SQLITE_PATH=./data/vanta-phase4-reconcile.sqlite corepack pnpm state:risk`
+- The read-side recovery path still reconciles cleanly after the Phase 4 wiring changes; the verified manual testnet reconcile run completed with `trustStateAfter=trusted` and `issueCount=0`.
+
+### Known issues / blockers
+- This is only the first Phase 4 slice. The risk engine does not yet implement:
+  - drawdown stops
+  - consecutive-loss cooldowns
+  - funding guards
+  - rate-limit-headroom guards
+  - stale-market-data / book-quality guards
+- No funded testnet write smoke was run in this session, so the new risk-gated write path still needs one live place/modify/cancel verification run with real testnet credentials.
+- Risk decisions are persisted, but there is still no separate strategy-intent layer. Strategies do not exist yet, so `ExecutionEngine` remains the current integration point for the risk gate by design.
+- `state:risk` is read-only and local-state-based; it does not force reconciliation itself. Operators should continue running `reconcile:run` before treating stale persisted state as trustworthy.
+
+### Exact next steps for the next agent session
+1. Stay inside Phase 4 only. Do not start strategies, Telegram, dashboards, paper mode, or backtesting yet.
+2. Run one funded testnet `smoke:execution --allow-write-actions ...` cycle against the new risk-gated execution path and inspect `execution_actions`, `risk_event_records`, `cloid_mappings`, and `order_state_transitions`.
+3. Finish the remaining Phase 4 guards: drawdown stops, consecutive-loss cooldowns, funding-based entry blocking, and rate-limit / stale-market-data protection.
+4. Add a minimal risk-event/operator inspection test around real persisted decisions after a write-side smoke run so the next phase inherits hard evidence, not assumptions.
+5. Only after Phase 4 is complete should the next agent move into Phase 5 strategy runtime and the first `trend-pullback-v1` intent pipeline.

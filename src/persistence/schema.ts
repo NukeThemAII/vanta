@@ -213,6 +213,22 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
     )
   `,
   `
+    CREATE TABLE IF NOT EXISTS risk_event_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      boot_id TEXT,
+      occurred_at TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      operator_address TEXT NOT NULL,
+      trust_state TEXT NOT NULL,
+      decision TEXT NOT NULL,
+      market_symbol TEXT,
+      asset_id INTEGER,
+      correlation_id TEXT,
+      message TEXT NOT NULL,
+      details_json TEXT
+    )
+  `,
+  `
     CREATE TABLE IF NOT EXISTS cloid_mappings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       client_order_id TEXT NOT NULL UNIQUE,
@@ -278,6 +294,8 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
   "CREATE INDEX IF NOT EXISTS idx_runtime_state_transitions_changed_at ON runtime_state_transitions(changed_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_execution_actions_created_at ON execution_actions(created_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_execution_actions_client_order_id ON execution_actions(client_order_id)",
+  "CREATE INDEX IF NOT EXISTS idx_risk_event_records_occurred_at ON risk_event_records(occurred_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_risk_event_records_market_symbol ON risk_event_records(market_symbol, occurred_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_cloid_mappings_market_symbol ON cloid_mappings(market_symbol, updated_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_order_state_records_client_order_id ON order_state_records(client_order_id)",
   "CREATE INDEX IF NOT EXISTS idx_order_state_records_order_id ON order_state_records(order_id)",

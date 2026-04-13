@@ -32,3 +32,10 @@ export class OrderFormattingError extends ExecutionError {
     this.name = "OrderFormattingError";
   }
 }
+
+export class RiskCheckError extends ExecutionError {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "RiskCheckError";
+  }
+}

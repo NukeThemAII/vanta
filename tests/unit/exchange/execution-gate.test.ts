@@ -1,6 +1,7 @@
 import pino from "pino";
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_RISK_CONFIG } from "../../../src/config/risk.js";
 import { resolveNetworkConfig } from "../../../src/config/networks.js";
 import type { AppConfig } from "../../../src/core/types.js";
 import { ExecutionGateError } from "../../../src/core/errors.js";
@@ -68,6 +69,7 @@ function makeConfig(networkName: "testnet" | "mainnet"): AppConfig {
     network: resolveNetworkConfig(networkName),
     logLevel: "silent",
     sqlitePath: ":memory:",
+    risk: DEFAULT_RISK_CONFIG,
     watchedMarkets: ["BTC", "ETH"],
     operatorAddress: "0x1111111111111111111111111111111111111111",
     apiWallet: {
