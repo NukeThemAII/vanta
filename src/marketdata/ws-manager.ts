@@ -4,6 +4,7 @@ import type { Logger } from "pino";
 
 import type { FoundationMarket } from "../config/markets.js";
 import type { AppEventRecordInput, AppEventSeverity, JsonValue } from "../core/types.js";
+import type { CandleStore } from "./candle-store.js";
 import type { MarketDataHealthMonitor, MarketDataHealthSnapshot, MarketDataHealthThresholds } from "./health.js";
 import { normalizeAllMidsEvent, normalizeTradesEvent } from "./normalizers.js";
 import type { AppEventRepository } from "../persistence/repositories/app-event-repository.js";
@@ -16,6 +17,7 @@ interface MarketDataWsManagerOptions {
   readonly transport: WebSocketTransport;
   readonly appEvents: AppEventRepository;
   readonly marketEvents: MarketEventRepository;
+  readonly candleStore: CandleStore;
   readonly healthMonitor: MarketDataHealthMonitor;
   readonly logger: Logger;
   readonly onFatalFailure: (error: Error) => void;
@@ -167,11 +169,28 @@ export class MarketDataWsManager {
   private handleTrades(market: FoundationMarket, trades: TradesEvent): void {
     const normalizedEvent = normalizeTradesEvent(market, trades);
 
-    this.options.healthMonitor.record(normalizedEvent);
-    this.options.marketEvents.insert({
-      bootId: this.options.bootId,
-      ...normalizedEvent
-    });
+    try {
+      this.options.healthMonitor.record(normalizedEvent);
+      this.options.marketEvents.insert({
+        bootId: this.options.bootId,
+        ...normalizedEvent
+      });
+      this.options.candleStore.ingestTrades({
+        market,
+        trades,
+        receivedAt: normalizedEvent.receivedAt,
+        bootId: this.options.bootId
+      });
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error("Unknown candle recording failure");
+      this.recordAppEvent("marketdata.candle_recording_failure", "error", "Failed to record candle bars from trade event", {
+        market,
+        errorName: failure.name,
+        errorMessage: failure.message
+      });
+      this.options.onFatalFailure(failure);
+      return;
+    }
 
     this.incrementEventCount(`${normalizedEvent.channel}:${normalizedEvent.market}`);
     this.logMarketEvent(normalizedEvent.channel, normalizedEvent.market, normalizedEvent.payload);

@@ -19,6 +19,7 @@ describe("parseAppConfig", () => {
     expect(config.risk.userStateMaxSyncWaitMs).toBe(30_000);
     expect(config.risk.enforceStopLossForEntries).toBe(false);
     expect(config.retention.marketEventsDays).toBe(7);
+    expect(config.retention.candleBarsDays).toBe(365);
   });
 
   it("normalizes CSV market input and optional api wallet config", () => {
@@ -56,6 +57,7 @@ describe("parseAppConfig", () => {
       VANTA_RISK_MIN_RATE_LIMIT_SURPLUS: "10",
       VANTA_RISK_ENFORCE_STOP_LOSS_FOR_ENTRIES: "true",
       VANTA_RETENTION_MARKET_EVENTS_DAYS: "3",
+      VANTA_RETENTION_CANDLE_BARS_DAYS: "180",
       VANTA_RETENTION_RUNTIME_STATE_DAYS: "14",
       VANTA_RETENTION_EXECUTION_AUDIT_DAYS: "120"
     });
@@ -80,6 +82,7 @@ describe("parseAppConfig", () => {
     });
     expect(config.retention).toEqual({
       marketEventsDays: 3,
+      candleBarsDays: 180,
       runtimeStateDays: 14,
       executionAuditDays: 120
     });

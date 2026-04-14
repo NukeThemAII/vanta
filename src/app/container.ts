@@ -12,12 +12,14 @@ import { HyperliquidOrderFormatter } from "../exchange/order-formatter.js";
 import { OrderStateMachine } from "../exchange/order-state-machine.js";
 import { SignerRegistry } from "../exchange/signer-registry.js";
 import { UserStateHealthMonitor } from "../exchange/user-state-health.js";
+import { CandleStore } from "../marketdata/candle-store.js";
 import { MarketDataHealthMonitor } from "../marketdata/health.js";
 import { SqliteDatabase } from "../persistence/db.js";
 import { AssetRegistryRepository } from "../persistence/repositories/asset-registry-repository.js";
 import { AppBootRepository } from "../persistence/repositories/app-boot-repository.js";
 import { AppEventRepository } from "../persistence/repositories/app-event-repository.js";
 import { CloidMappingRepository } from "../persistence/repositories/cloid-mapping-repository.js";
+import { CandleRepository } from "../persistence/repositories/candle-repository.js";
 import { ExecutionActionRepository } from "../persistence/repositories/execution-action-repository.js";
 import { FillRepository } from "../persistence/repositories/fill-repository.js";
 import { MarketEventRepository } from "../persistence/repositories/market-event-repository.js";
@@ -45,12 +47,14 @@ export interface FoundationContainer {
   readonly runtimeStateRepository: RuntimeStateRepository;
   readonly appEventRepository: AppEventRepository;
   readonly marketEventRepository: MarketEventRepository;
+  readonly candleRepository: CandleRepository;
   readonly userEventRepository: UserEventRepository;
   readonly fillRepository: FillRepository;
   readonly riskEventRepository: RiskEventRepository;
   readonly marketDataHealthMonitor: MarketDataHealthMonitor;
   readonly userStateHealthMonitor: UserStateHealthMonitor;
   readonly retentionService: RetentionService;
+  readonly candleStore: CandleStore;
   readonly reconciliationService: ReconciliationService;
   readonly runtimeTrustController: RuntimeTrustController;
   readonly signerRegistry: SignerRegistry;
@@ -65,6 +69,7 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
   const bootRepository = new AppBootRepository(database.connection);
   const appEventRepository = new AppEventRepository(database.connection);
   const marketEventRepository = new MarketEventRepository(database.connection);
+  const candleRepository = new CandleRepository(database.connection);
   const assetRegistryRepository = new AssetRegistryRepository(database.connection);
   const stateSnapshotRepository = new StateSnapshotRepository(database.connection);
   const reconciliationRepository = new ReconciliationRepository(database.connection);
@@ -78,6 +83,11 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
   const retentionRepository = new RetentionRepository(database.connection);
   const marketDataHealthMonitor = new MarketDataHealthMonitor();
   const userStateHealthMonitor = new UserStateHealthMonitor();
+  const candleStore = new CandleStore({
+    network: config.network.name,
+    repository: candleRepository,
+    logger: createComponentLogger(logger, "marketdata.candle-store")
+  });
   const exchangeLogger = createComponentLogger(logger, "exchange.hyperliquid-client");
   const exchangeClient = new HyperliquidClient(config, exchangeLogger);
   const runtimeTrustController = new RuntimeTrustController(
@@ -152,6 +162,7 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
     bootRepository,
     appEventRepository,
     marketEventRepository,
+    candleStore,
     userEventRepository,
     fillRepository,
     exchangeClient,
@@ -178,12 +189,14 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
     runtimeStateRepository,
     appEventRepository,
     marketEventRepository,
+    candleRepository,
     userEventRepository,
     fillRepository,
     riskEventRepository,
     marketDataHealthMonitor,
     userStateHealthMonitor,
     retentionService,
+    candleStore,
     reconciliationService,
     runtimeTrustController,
     signerRegistry,

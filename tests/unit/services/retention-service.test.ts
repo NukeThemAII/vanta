@@ -28,6 +28,7 @@ describe("RetentionService", () => {
   it("deletes expired rows when apply is requested", () => {
     const db = new SqliteDatabase(":memory:");
     seedTable(db, "market_events", "received_at", "2026-04-01T00:00:00.000Z");
+    seedTable(db, "candle_bars", "updated_at", "2025-01-01T00:00:00.000Z");
     seedTable(db, "app_events", "event_time", "2026-02-01T00:00:00.000Z");
     seedTable(db, "fill_records", "recorded_at", "2025-12-01T00:00:00.000Z");
 
@@ -42,8 +43,9 @@ describe("RetentionService", () => {
     });
 
     expect(summary.mode).toBe("apply");
-    expect(summary.totalDeletedRows).toBe(3);
+    expect(summary.totalDeletedRows).toBe(4);
     expect(countRows(db, "market_events")).toBe(0);
+    expect(countRows(db, "candle_bars")).toBe(0);
     expect(countRows(db, "app_events")).toBe(0);
     expect(countRows(db, "fill_records")).toBe(0);
 
@@ -94,6 +96,45 @@ function seedTable(db: SqliteDatabase, table: string, timestampColumn: string, t
           'test.component',
           'test message',
           NULL
+        )
+      `).run(timestampIso);
+      return;
+    case "candle_bars":
+      db.connection.prepare(`
+        INSERT INTO candle_bars (
+          boot_id,
+          network,
+          market,
+          interval,
+          open_time_ms,
+          close_time_ms,
+          open_price,
+          high_price,
+          low_price,
+          close_price,
+          base_volume,
+          quote_volume,
+          trade_count,
+          first_trade_time_ms,
+          last_trade_time_ms,
+          updated_at
+        ) VALUES (
+          'boot',
+          'testnet',
+          'BTC',
+          '1m',
+          1,
+          60000,
+          '68000',
+          '68100',
+          '67950',
+          '68050',
+          '0.3',
+          '20420',
+          2,
+          1,
+          2,
+          ?
         )
       `).run(timestampIso);
       return;

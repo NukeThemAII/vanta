@@ -5,6 +5,7 @@ import type { Logger } from "pino";
 import { asJsonValue, type AppConfig, type JsonValue } from "../core/types.js";
 import type { HyperliquidClient } from "../exchange/hyperliquid-client.js";
 import type { UserStateHealthMonitor, UserStateHealthSnapshot } from "../exchange/user-state-health.js";
+import type { CandleStore } from "../marketdata/candle-store.js";
 import { UserStateWsManager } from "../exchange/user-state-ws-manager.js";
 import type { MarketDataHealthMonitor, MarketDataHealthSnapshot } from "../marketdata/health.js";
 import type { OrderStateMachine } from "../exchange/order-state-machine.js";
@@ -25,6 +26,7 @@ interface FoundationServiceOptions {
   readonly bootRepository: AppBootRepository;
   readonly appEventRepository: AppEventRepository;
   readonly marketEventRepository: MarketEventRepository;
+  readonly candleStore: CandleStore;
   readonly userEventRepository: UserEventRepository;
   readonly fillRepository: FillRepository;
   readonly exchangeClient: HyperliquidClient;
@@ -94,6 +96,7 @@ export class FoundationService {
       transport: this.options.exchangeClient.wsTransport,
       appEvents: this.options.appEventRepository,
       marketEvents: this.options.marketEventRepository,
+      candleStore: this.options.candleStore,
       healthMonitor: this.options.marketDataHealthMonitor,
       logger: this.options.logger.child({ module: "marketdata.ws-manager" }),
       onFatalFailure: (error) => {
@@ -255,6 +258,7 @@ export class FoundationService {
           bootId: this.bootId,
           trustState: this.options.reconciliationService.getCurrentTrustState(),
           marketDataStats: this.marketDataWsManager?.getStats() ?? {},
+          candleStoreStats: this.options.candleStore.getStats(),
           marketDataHealth,
           userStateStats: this.userStateWsManager?.getStats() ?? {},
           userStateHealth

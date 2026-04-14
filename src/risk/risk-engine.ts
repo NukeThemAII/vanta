@@ -403,8 +403,8 @@ export class RiskEngine {
 
     const asset = registry.getByAssetId(assetId);
     if (asset === undefined || asset.kind !== "perp") {
-      guardOutcomes.push(outcomeFromGuard("asset_registry", "rejected", `Phase 4 risk engine supports perps only; asset ${assetId} is unavailable or not a perp`));
-      this.reject(actionType, identity, bootId, normalizedRequest, correlationId, `Phase 4 risk engine supports perps only; asset ${assetId} is unavailable or not a perp`, guardOutcomes);
+      guardOutcomes.push(outcomeFromGuard("asset_registry", "rejected", `Risk engine supports perps only; asset ${assetId} is unavailable or not a perp`));
+      this.reject(actionType, identity, bootId, normalizedRequest, correlationId, `Risk engine supports perps only; asset ${assetId} is unavailable or not a perp`, guardOutcomes);
     }
 
     guardOutcomes.push(outcomeFromGuard("asset_registry", "approved", `Resolved perp metadata for ${asset.symbol}`));
@@ -484,7 +484,7 @@ export class RiskEngine {
       return;
     }
 
-      this.options.logger.debug(logPayload, message);
+    this.options.logger.debug(logPayload, message);
   }
 
   private resolveReferencePrice(asset: PerpAssetRecord): {

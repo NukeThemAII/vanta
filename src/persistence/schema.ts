@@ -39,6 +39,27 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
     )
   `,
   `
+    CREATE TABLE IF NOT EXISTS candle_bars (
+      boot_id TEXT,
+      network TEXT NOT NULL,
+      market TEXT NOT NULL,
+      interval TEXT NOT NULL,
+      open_time_ms INTEGER NOT NULL,
+      close_time_ms INTEGER NOT NULL,
+      open_price TEXT NOT NULL,
+      high_price TEXT NOT NULL,
+      low_price TEXT NOT NULL,
+      close_price TEXT NOT NULL,
+      base_volume TEXT NOT NULL,
+      quote_volume TEXT NOT NULL,
+      trade_count INTEGER NOT NULL,
+      first_trade_time_ms INTEGER NOT NULL,
+      last_trade_time_ms INTEGER NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (network, market, interval, open_time_ms)
+    )
+  `,
+  `
     CREATE TABLE IF NOT EXISTS asset_registry_snapshots (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       boot_id TEXT,
@@ -314,6 +335,7 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
   "CREATE INDEX IF NOT EXISTS idx_app_events_boot_time ON app_events(boot_id, event_time)",
   "CREATE INDEX IF NOT EXISTS idx_market_events_boot_time ON market_events(boot_id, received_at)",
   "CREATE INDEX IF NOT EXISTS idx_market_events_market_channel_time ON market_events(market, channel, received_at)",
+  "CREATE INDEX IF NOT EXISTS idx_candle_bars_market_interval_time ON candle_bars(network, market, interval, open_time_ms DESC)",
   "CREATE INDEX IF NOT EXISTS idx_asset_registry_snapshots_created_at ON asset_registry_snapshots(created_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_account_snapshots_operator_created_at ON account_snapshots(operator_address, created_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_open_order_runs_operator_created_at ON open_order_snapshot_runs(operator_address, created_at DESC)",

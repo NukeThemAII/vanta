@@ -54,6 +54,7 @@ export interface RiskConfig {
 
 export interface RetentionConfig {
   readonly marketEventsDays: number;
+  readonly candleBarsDays: number;
   readonly runtimeStateDays: number;
   readonly executionAuditDays: number;
 }

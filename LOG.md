@@ -697,3 +697,137 @@ Continue Phase 4 only and settle the degraded-trust execution policy:
 3. Add a minimal operator-facing emergency safety CLI if needed, using the now-explicit degraded-trust policy rather than inventing a new one.
 4. If stronger private-stream continuity guarantees are still wanted later, tie them to active orders/positions instead of idle-account wall-clock silence.
 5. Only after funded write-path evidence is captured should the next agent move into Phase 5 strategy runtime.
+
+## 2026-04-14T00:10:00+02:00
+
+### Objective
+Add an operator setup guide for Hyperliquid testnet credentials and funding:
+- explain operator wallet vs API wallet
+- explain how to generate a local private key safely
+- explain Hyperliquid testnet faucet constraints
+- explain exactly where Vanta expects the config values
+
+### Files created/changed
+- `GUIDE.md`
+- `LOG.md`
+
+### What works now
+- `GUIDE.md` now documents the full operator-side setup flow for Vanta testnet execution.
+- The guide explains:
+  - `VANTA_OPERATOR_ADDRESS` vs `VANTA_API_WALLET_PRIVATE_KEY`
+  - that the API wallet signs but does not need funds
+  - that the operator/master address is the funded account Vanta reads
+  - how to generate a private key locally
+  - how to derive the API wallet public address locally
+  - where to place the values in `.env`
+  - what read-side and write-side commands to run next
+- The guide also makes the security stance explicit:
+  - do not paste private keys into chat
+  - do not commit them
+  - keep secrets in the local `.env` file only
+- Official Hyperliquid docs were checked for the faucet and API-wallet behavior before writing the guide.
+
+### Known issues / blockers
+- The guide depends on the operator completing the external Hyperliquid steps:
+  - approve API wallet
+  - claim testnet funds
+  - create the local `.env`
+- No funded testnet write smoke was run in this session because no secret or funded wallet was added to the workspace.
+
+### Exact next steps for the next agent session
+1. Wait for the operator to complete `GUIDE.md` setup locally.
+2. Run `corepack pnpm reconcile:run` and `corepack pnpm state:risk` against the real local `.env`.
+3. Run one funded testnet `smoke:execution --allow-write-actions ...` cycle and inspect the persisted execution/risk tables.
+4. Only after funded write-path evidence is captured should the next agent move beyond Phase 4.
+
+## 2026-04-14T08:58:35+02:00
+
+### Objective
+Take the updated `AUDIT.md` seriously and close the highest-signal code gap that was explicitly called out:
+- remove the Phase 5 blocker caused by having no local candle recorder
+- make candle recording restart-safe and duplicate-safe
+- expose recorded candles through a read-only operator CLI
+- clear the remaining small audit nits touched by this work
+
+### Files created/changed
+- `LOG.md`
+- `.env.example`
+- `package.json`
+- `src/app/container.ts`
+- `src/cli/show-candles.ts`
+- `src/config/env.ts`
+- `src/config/retention.ts`
+- `src/core/types.ts`
+- `src/marketdata/candle-store.ts`
+- `src/marketdata/ws-manager.ts`
+- `src/persistence/repositories/candle-repository.ts`
+- `src/persistence/repositories/retention-repository.ts`
+- `src/persistence/schema.ts`
+- `src/risk/risk-engine.ts`
+- `src/services/foundation-service.ts`
+- `tests/unit/config/env.test.ts`
+- `tests/unit/marketdata/candle-store.test.ts`
+- `tests/unit/services/retention-service.test.ts`
+
+### What works now
+- Vanta now has a real local candle recorder built from live Hyperliquid trade events.
+- `CandleStore` aggregates and persists trade-driven bars for:
+  - `1m`
+  - `5m`
+  - `15m`
+- Candle aggregation is restart-safe:
+  - if the process restarts during an open bucket, the next trade batch reloads the persisted bar and continues updating it instead of starting from zero
+- Candle aggregation is duplicate-safe for repeated trade batches within the in-memory retention window:
+  - repeated `(market, time, tid)` trades are ignored so reconnect/replay duplication does not inflate volume or trade counts
+- Candle rows are stored in the new `candle_bars` table with a composite primary key on:
+  - `network`
+  - `market`
+  - `interval`
+  - `open_time_ms`
+- Candle retention is now configurable through env:
+  - `VANTA_RETENTION_CANDLE_BARS_DAYS`
+- Operator inspection is available through:
+  - `corepack pnpm state:candles -- --market BTC --interval 1m --limit 5`
+- The new candle CLI now correctly tolerates pnpm’s `--` argument separator and validates markets against the actual configured foundation market set instead of an incorrect hardcoded list.
+- The remaining audit nit in `risk-engine.ts` was cleaned up:
+  - the old `"Phase 4 risk engine supports perps only..."` message now uses neutral policy language
+  - the visible indentation inconsistency around the `debug` log path was fixed
+- Verified in this session:
+  - `corepack pnpm typecheck`
+  - `corepack pnpm test`
+  - `corepack pnpm lint`
+  - `corepack pnpm build`
+  - `timeout 8s env VANTA_BOOTSTRAP_USER_STATE=false VANTA_LOG_LEVEL=debug VANTA_SQLITE_PATH=./data/vanta-candles-debug.sqlite node dist/cli/run-foundation.js`
+  - `env VANTA_BOOTSTRAP_USER_STATE=false VANTA_SQLITE_PATH=./data/vanta-candles-debug.sqlite corepack pnpm state:candles -- --market BTC --interval 1m --limit 5`
+- The live testnet proof showed:
+  - `marketdata.candle-store` recorded BTC and ETH trade batches
+  - `candle_bars` persisted rows to SQLite
+  - `state:candles` returned real persisted BTC 1m bars from the live testnet run
+
+### Known issues / blockers
+- The single biggest unresolved verification gap remains unchanged:
+  - no funded testnet write-side smoke run has been executed yet through the fully risk-gated path
+- The repo still has no migration/versioning system for the growing SQLite schema. After adding `candle_bars`, that debt is more urgent, not less.
+- Candle recording now exists, but the rest of the Phase 5 strategy runtime still does not:
+  - no `src/strategies/`
+  - no `src/intents/`
+  - no `src/config/strategy-maps.ts`
+- Candle bars are trade-derived only right now:
+  - there is still no explicit candle backfill service or indicator pipeline
+- `GUIDE.md` from the previous session is still uncommitted in the worktree alongside this candle work.
+
+### Exact next steps for the next agent session
+1. Do not jump into Telegram, dashboards, or AI trading logic.
+2. Run one real funded testnet `smoke:execution --allow-write-actions ...` cycle and inspect:
+   - `execution_actions`
+   - `risk_event_records`
+   - `order_state_transitions`
+   - `fill_records`
+   - `cloid_mappings`
+3. Add a minimal schema migration/versioning system before adding many more Phase 5 tables.
+4. After the funded smoke and migration groundwork, start Phase 5 properly:
+   - `src/strategies/interfaces.ts`
+   - `src/intents/intents.ts`
+   - `src/config/strategy-maps.ts`
+   - the first strategy runtime wiring
+5. Keep using the candle recorder as the base input layer for future indicators and replayable strategy state.

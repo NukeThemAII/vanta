@@ -24,6 +24,12 @@ const RETENTION_DEFINITIONS: readonly RetentionDefinition[] = [
     retentionDays: (config) => config.marketEventsDays
   },
   {
+    target: "candle_bars",
+    table: "candle_bars",
+    timestampColumn: "updated_at",
+    retentionDays: (config) => config.candleBarsDays
+  },
+  {
     target: "app_events",
     table: "app_events",
     timestampColumn: "event_time",

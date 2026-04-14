@@ -180,6 +180,7 @@ const ENV_SCHEMA = z.object({
   VANTA_RISK_MIN_RATE_LIMIT_SURPLUS: nonNegativeInteger(DEFAULT_RISK_CONFIG.minRateLimitSurplus),
   VANTA_RISK_ENFORCE_STOP_LOSS_FOR_ENTRIES: booleanish(DEFAULT_RISK_CONFIG.enforceStopLossForEntries),
   VANTA_RETENTION_MARKET_EVENTS_DAYS: positiveInteger(DEFAULT_RETENTION_CONFIG.marketEventsDays),
+  VANTA_RETENTION_CANDLE_BARS_DAYS: positiveInteger(DEFAULT_RETENTION_CONFIG.candleBarsDays),
   VANTA_RETENTION_RUNTIME_STATE_DAYS: positiveInteger(DEFAULT_RETENTION_CONFIG.runtimeStateDays),
   VANTA_RETENTION_EXECUTION_AUDIT_DAYS: positiveInteger(DEFAULT_RETENTION_CONFIG.executionAuditDays)
 });
@@ -223,6 +224,7 @@ function buildAppConfig(parsed: ParsedEnvironment): AppConfig {
     },
     retention: {
       marketEventsDays: parsed.VANTA_RETENTION_MARKET_EVENTS_DAYS,
+      candleBarsDays: parsed.VANTA_RETENTION_CANDLE_BARS_DAYS,
       runtimeStateDays: parsed.VANTA_RETENTION_RUNTIME_STATE_DAYS,
       executionAuditDays: parsed.VANTA_RETENTION_EXECUTION_AUDIT_DAYS
     },
