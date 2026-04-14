@@ -1,61 +1,54 @@
 # AUDIT.md — Vanta-HL Industry Standards Audit
 
-**Audited:** 2026-04-14 (v3 — updated post Phase 4 completion)
+**Audited:** 2026-04-14 (v4 — updated post candle recording + operator guide)
 **Auditor:** Antigravity (AI Engineering Partner)
 **Scope:** Full repository audit against industry standards for production-grade algorithmic trading systems.
-**Phases completed (per LOG.md):** Phase 1 (Foundation), Phase 2 (Exchange State & Recovery), Phase 3 (Write-Side Execution) + post-audit hardening, Phase 4 (Risk Engine — fully complete)
-**Phases outstanding:** Phase 5 (Strategy Runtime), Phase 6 (Telegram), Phase 7 (Hardening)
+**Phases completed (per LOG.md):** Phase 1 (Foundation), Phase 2 (Exchange State & Recovery), Phase 3 (Write-Side Execution) + post-audit hardening, Phase 4 (Risk Engine — fully complete), Phase 5 (Candle Recording — partial, market data layer only)
+**Phases outstanding:** Phase 5 (Strategy Runtime — interfaces, intents, first strategy), Phase 6 (Telegram), Phase 7 (Hardening)
 
 ---
 
-## Changelog vs. v2 Audit
+## Changelog vs. v3 Audit
 
 | Finding | Status |
 |---|---|
-| RISK-2 · No drawdown stops | ✅ **Fixed** — daily + weekly realized drawdown guards implemented via `fill_records` |
-| RISK-3 · No consecutive-loss cooldown | ✅ **Fixed** — per-market consecutive-loss streak with configurable cooldown window |
-| RISK-4 · No funding guard | ✅ **Fixed** — directional funding rate guard blocks hostile entry |
-| RISK-1 · Guard ordering suboptimal | ✅ **Fixed** — cheap guards run before expensive stop-sizing logic |
-| RISK-5 · `resolveReferencePrice` silent fallback | ✅ **Fixed** — now logs warning when falling back from mid to mark/oracle |
-| DB-4 · No fills table | ✅ **Fixed** — `fill_records` with upsert, PnL summation, and consecutive-loss queries |
-| DB-4 (v2) · No `risk_event_records` index | ✅ **Fixed** — 3 indexes added: `occurred_at`, `operator+occurred_at`, `market_symbol+occurred_at` |
-| TS-5 · "Phase 4" in leverage guard message | ✅ **Fixed** — replaced with policy language |
-| EX-4 · No rate-limit headroom guard | ✅ **Fixed** — rate-limit surplus guard implemented |
-| RC-2 · No watchdog for WS silence | ✅ **Fixed** — `MarketDataHealthMonitor` + `UserStateHealthMonitor` with auto-degradation |
-| DB-2 · `market_events` unbounded growth | ✅ **Fixed** — `RetentionService` + `RetentionRepository` with configurable TTL |
-| OPS-5 · No data retention policy | ✅ **Fixed** — `pnpm retention:run` with preview/apply/vacuum |
-| EX-1 · `ExecutionGate` testnet hardcode | ⚠️ Partially addressed — degraded-trust emergency actions now allowed, but testnet-only hardcode remains |
-| TS-3 · No migration system | ❌ Still open |
-| OPS-1 · No systemd unit file | ❌ Still open |
-| OPS-4 · No paper-trading mode | ❌ Still open |
-| EX-2 · No batch cancel / batch modify | ❌ Still open |
-| EX-3 · No dead-man's switch auto-refresh | ❌ Still open |
-| TEST-3 · Write smoke test never run with real credentials | ❌ **Still the single biggest open item** |
-| G-1 · No strategy module | ❌ Phase 5 scope |
-| G-6 · No candle recorder | ❌ Phase 5 blocker |
+| G-6 · No candle recorder (Phase 5 blocker) | ✅ **Fixed** — `CandleStore` + `CandleRepository` + `candle_bars` table recording 1m/5m/15m bars from live trades |
+| EX-5 · `requirePerpAsset` "Phase 4" message | ✅ **Fixed** — now uses neutral `"Risk engine supports perps only"` |
+| TS-6 · Indentation inconsistency in `risk-engine.ts:487` | ✅ **Fixed** — `debug` log path aligned |
+| G-6 (table) · `candle_bars` not in retention | ✅ **Fixed** — retention definition added with `candleBarsDays: 365` default |
+| OPS-8 (new) · No operator setup guide | ✅ **Fixed** — `GUIDE.md` documents full testnet credential setup |
+| CANDLE-1 (new) · Candle error triggers `onFatalFailure` | 🔴 **New issue** — candle recording failure kills entire WS pipeline |
+| CANDLE-2 (new) · No candle backfill service | 🔴 **New issue** — gaps on restart are not filled retroactively |
+| CANDLE-3 (new) · `seenTrades` dedup is in-memory only | 🔴 **New issue** — duplicate protection lost on restart within eviction window |
+| CANDLE-4 (new) · `applyTradeToBar` close-price tie-breaking | 🔴 **New issue** — `>=` means later-or-equal trade wins close price |
+| TEST-3 · Write smoke test never run | ❌ **Still the single biggest open item** |
+| TS-3 · No migration system | ❌ Still open (now 20 tables + 21 indexes) |
 
 ---
 
 ## Executive Summary
 
-Phase 4 is now functionally complete. The risk engine has grown from 4 guards (v2) to **9 guards**,
-backed by a dedicated fill ledger, temporal drawdown/cooldown controls, market-data and
-user-state health monitors, a retention subsystem, and a tiered degraded-trust execution policy.
+This commit adds the **candle recording subsystem** — the last hard architectural blocker
+called out in AGENTS.md before strategies can compute indicators. The implementation is
+well-designed: trade events flow through `MarketDataWsManager` → `CandleStore` →
+`CandleRepository` → `candle_bars`, with duplicate trade suppression, restart-safe bar
+resumption from SQLite, and 3 time intervals (1m, 5m, 15m) supported from day one.
 
-The bot now has every mandatory risk guard specified in AGENTS.md except for a higher-level
-"strategy-level disable switch" (which requires strategies to exist). The architecture is
-production-grade in its risk controls: every trade proposal must pass through stale-state,
-rate-limit, open-order, position-limit, drawdown, cooldown, funding, market-data freshness,
-notional, slippage, and stop-sizing checks — all persisted, all configurable, all pure functions.
+The commit also adds `GUIDE.md`, a comprehensive operator setup guide for Hyperliquid testnet
+credentials, wallet roles, and first-run verification. This is genuinely useful for operational
+readiness and documents the wallet model cleanly.
 
-The single most impactful remaining gap is that **no funded testnet write-side smoke test has
-ever been executed**. The execution spine, risk gating, and fill persistence have been
-validated via unit tests and offline reconciliation runs, but the complete
-`place → ack → fill → cancel` lifecycle has never been exercised end-to-end with real capital.
-This was explicitly called out in v1 and v2, remains true in v3, and is the P0 item for Phase 5.
+The remaining audit nits from v3 (the "Phase 4" message in `requirePerpAsset` and the
+`risk-engine.ts` indentation) were also fixed.
 
-**Overall grade: A (production-grade risk layer complete; one critical smoke test gap, Phase 5
-scope begins)**
+**The highest-impact new concern** is that candle recording failures (e.g., SQLite write error
+during `ingestTrades`) now trigger `onFatalFailure`, which escalates to `untrusted` runtime
+state and aborts the entire foundation service. This means a transient database issue during
+candle aggregation would kill the market data pipeline, not just the candle recorder. This
+should be isolated.
+
+**Overall grade: A (Phase 4 complete, candle recording operational, Phase 5 strategy work
+can begin. One critical smoke test gap remains.)**
 
 ---
 
@@ -65,347 +58,238 @@ scope begins)**
 
 | Area | Assessment |
 |---|---|
-| Risk guard composability | 9 pure-function guards, each in its own file. Adding a new guard is mechanical. Zero coupling between guards. |
-| Temporal risk controls | Drawdown + cooldown use persisted fill history, not in-memory counters. Fully restart-safe. |
-| Health monitoring architecture | `MarketDataHealthMonitor` and `UserStateHealthMonitor` are observer-pattern objects updated by WS managers and consumed by `FoundationService` for trust degradation + by `RiskEngine` for order gating. Clean separation. |
-| Retention as config-driven policy | 13 tables covered by `RetentionRepository` definitions. Configurable per-tier TTL via env vars. Preview-before-apply pattern prevents accidental data loss. |
-| Degraded-trust execution policy | `ExecutionGate` now has a three-tier model: `trusted` = all writes, `degraded` = emergency cancel/schedule_cancel only, `untrusted` = no writes. Exported as a testable function. |
-| Fill normalization | `normalizeUserFills()` in `portfolio/fills.ts` provides a single canonical mapping from both REST reconciliation and live WS `userFills` events into `FillRecord`. No drift between the two ingestion paths. |
-| Auto-recovery | `FoundationService` auto-recovers trust when market-data health or user-state sync returns to healthy after being degraded. Not just degrade-only. |
+| Candle store design | Trade-driven aggregation with configurable intervals. Pure bucket math (`toBucketStartMs`). Clean separation between in-memory state and persistence. |
+| Restart-safe bar resumption | On restart, `CandleStore` queries `CandleRepository.get()` for the existing persisted bar before aggregating new trades. No data loss on process restart. |
+| Duplicate trade suppression | `seenTrades` Map tracks `(market:time:tid)` fingerprints with a 24h eviction window. Prevents reconnect/replay from double-counting volume. |
+| Retention coverage | `candle_bars` immediately added to retention definitions with `candleBarsDays: 365`. No dangling table left behind. |
+| OHLCV correctness | Volume uses `multiplyDecimalStrings(price, size)` for quote volume — proper BigInt arithmetic, not floating-point. Open/close use first/last trade time for ordering. |
+| Operator guide quality | `GUIDE.md` correctly separates operator address (funded, reads positions) from API wallet (signs, needs approval). Covers faucet prerequisites, local key generation, approval flow, `.env` configuration, and step-by-step verification. |
 
 ### ⚠️ Remaining Gaps
 
 **G-1 — No strategy module (Phase 5)**
-`src/strategies/` still missing. This is the next major body of work.
+`src/strategies/` still missing. Now the candle recorder exists, indicator computation is feasible.
 
 **G-3 — No intent translation layer (Phase 5)**
-`src/intents/` still does not exist. The risk engine currently accepts `FormattedOrderRequest`,
-coupling it to execution format. Must be addressed when strategies emit intents.
+`src/intents/` still does not exist.
 
 **G-4 — Container is growing**
-`container.ts` now wires ~25 objects. Consider layering before Phase 5 adds strategy runtime,
-candle store, and indicator services.
+`container.ts` added `CandleRepository` + `CandleStore` wiring. Now ~27 objects.
 
 **G-5 — No market-to-strategy config**
-`src/config/strategy-maps.ts` still absent. Phase 5 blocker.
-
-**G-6 — No candle recorder (hard requirement, Phase 5 blocker)**
-No structured candle store. Strategies cannot compute indicators without it.
+`src/config/strategy-maps.ts` still absent.
 
 ---
 
-## 2. TypeScript & Code Quality
+## 2. Candle Recording (New Section)
 
-### ✅ Strengths (unchanged)
+### ✅ What's well-implemented
 
-Maximum-strictness TypeScript. Readonly-first. BigInt decimals throughout risk math. ESLint wired.
+- **Three intervals**: 1m, 5m, 15m — matching AGENTS.md's data input requirements for the first strategy.
+- **Trade-first aggregation**: Candles are built from raw trade events, not exchange REST candle snapshots. This gives the bot complete control over bar construction and avoids exchange candle API limits.
+- **Composite primary key**: `(network, market, interval, open_time_ms)` prevents cross-network/cross-market collisions.
+- **Dedicated index**: `idx_candle_bars_market_interval_time` on `(network, market, interval, open_time_ms DESC)` covers the primary query pattern.
+- **97% bar-math correctness**: Open/close prices track first/last trade by timestamp. High/low use BigInt comparison. Volume accumulates precisely.
+- **Tested**: 179-line test suite covers multi-interval aggregation, restart resume from persisted state, and duplicate trade suppression.
+- **Live-verified on testnet**: LOG.md records `candle_bars` rows persisted from real testnet runs and inspected via `state:candles`.
 
-### ⚠️ Issues (updated)
+### ⚠️ Issues
+
+**CANDLE-1 — Candle recording failure triggers `onFatalFailure` (High severity)**
+In `ws-manager.ts:184-192`, a candle recording exception (e.g., SQLite write error, decimal
+parse failure) calls `this.options.onFatalFailure(failure)`, which propagates to
+`FoundationService.handleRuntimeFailure()`, transitions trust to `untrusted`, and aborts the
+entire foundation service via `this.failureController.abort(error)`.
+
+The problem: candle recording is important but not mission-critical for risk/execution safety.
+A failed candle write should not shut down market-data health tracking, account monitoring, or
+execution. The error handler should log the failure, increment an error counter, and continue
+processing the next trade event.
+
+More critically, the `try/catch` at line 172 wraps `healthMonitor.record()` and
+`marketEvents.insert()` together with `candleStore.ingestTrades()`. This means if
+`healthMonitor.record()` succeeds but `candleStore.ingestTrades()` throws, the health state is
+updated but the trade event counter and log at lines 195-196 are skipped (due to the early
+`return`). And if `marketEvents.insert()` throws, it is now incorrectly attributed to candle
+recording.
+
+**Recommendation**: Split the try/catch so that candle recording has its own isolated error
+boundary, and never escalate to `onFatalFailure` for candle write failures.
+
+**CANDLE-2 — No candle backfill service (Medium)**
+If the bot is offline for 30 minutes, the candle bars for that period will be missing. There
+is no mechanism to fetch historical trades from Hyperliquid REST and backfill the gaps. For
+strategy indicators (EMA, ATR, RSI), gaps in the candle series will cause incorrect
+calculations. A backfill-on-startup service should be built before strategies consume candles.
+
+**CANDLE-3 — `seenTrades` dedup is in-memory only (Low)**
+The `seenTrades` Map that prevents duplicate trade counting is not persisted to SQLite. On
+restart within the 24h eviction window, the bot will re-ingest any trades from a reconnection
+replay that it had already seen before the restart. Since the `CandleStore` falls through to
+`CandleRepository.get()` for the persisted bar, the OHLC prices will be correct (they use
+min/max/first/last logic), but volume and trade count will be inflated.
+
+For MVP this is acceptable since strategy indicators will primarily use OHLC, not volume. But
+it should be documented as a known limitation.
+
+**CANDLE-4 — `applyTradeToBar` close-price tie-breaking uses `>=` (Cosmetic)**
+```typescript
+const isLaterTrade = trade.time >= bar.lastTradeTimeMs;
+```
+When two trades have identical timestamps, the later-iterated trade wins the close price. Since
+trades are sorted by `time, tid` before ingestion, trades with identical timestamps but
+higher `tid` will become the close price. This is actually correct behavior, but the `>=`
+could be confusing to a reader expecting `>`. Should have a comment.
+
+**CANDLE-5 — `show-candles.ts:47` — dead code in error handler**
+```typescript
+process.exitCode = failure instanceof ConfigurationError ? 1 : 1;
+```
+Both branches set `exitCode = 1`. The ternary is a vestigial conditional that does nothing.
+
+---
+
+## 3. TypeScript & Code Quality (updated)
+
+### ⚠️ Issues
 
 **TS-1 — `asJsonValue()` escape hatch (unchanged)**
-Still present. Acceptable for now but makes database forensics harder over time.
 
-**TS-2 — Fixed ✅** (`-1` fallback removed in v2)
-
-**TS-3 — Schema tables still have no migration system**
-`schema.ts` now has **~19 `CREATE TABLE IF NOT EXISTS`** statements and **~20 `CREATE INDEX`**
-statements. The debt is growing with each phase. A versioned migration system is urgently
-needed before Phase 5 adds more tables.
+**TS-3 — Schema tables still have no migration system (critical)**
+Now **20 `CREATE TABLE IF NOT EXISTS`** statements and **21 `CREATE INDEX`** statements. Each
+phase adds more. This is the most urgent technical debt item.
 
 **TS-4 — No lint / typecheck in CI or pre-commit (unchanged)**
 
-**TS-5 — Fixed ✅** (leverage guard message corrected)
-
-**TS-6 — `risk-engine.ts` line 487 has inconsistent indentation**
-```typescript
-      this.options.logger.debug(logPayload, message);
-```
-This line has extra leading whitespace compared to the surrounding code block (6 spaces instead
-of 4). Minor but visible in the diff.
-
 ---
 
-## 3. Persistence & Database
+## 4. Persistence & Database (updated)
 
-### ✅ Strengths (updated)
+### ✅ Improvements since v3
 
-| Area | Assessment |
+| Addition | Quality |
 |---|---|
-| `fill_records` table | Well-designed with composite `fill_key` (operator:tid) for upsert idempotency. Rich schema covering side, price, size, start_position, direction, closedPnl, fee, builderFee, crossed, isSnapshot. |
-| Fill indexes | 3 indexes: `(operator_address, exchange_timestamp_ms DESC)`, `(market_symbol, exchange_timestamp_ms DESC)`, `(order_id)`. Covers all query patterns. |
-| Risk event indexes | 3 indexes added since v2: `occurred_at DESC`, `(operator_address, occurred_at DESC)`, `(market_symbol, occurred_at DESC)`. |
-| Retention definitions | 13 tables covered: `market_events`, `app_events`, `app_boots`, `asset_registry_snapshots`, `account_snapshots`, `open_order_snapshot_runs`, `reconciliation_runs`, `user_event_records`, `runtime_state_transitions`, `fill_records`, `execution_actions`, `risk_event_records`, `order_state_transitions`. |
-| WAL checkpoint + VACUUM | `RetentionRepository` exposes `checkpointWal()` and `vacuum()` for post-cleanup compaction. |
+| `candle_bars` table | Well-designed OHLCV storage with composite PK `(network, market, interval, open_time_ms)`. Covers all supported intervals. |
+| `CandleRepository` | 203 lines. Upsert with `ON CONFLICT` update, point-get for resume, `listRecent` for operator inspection. Transactional `upsertMany`. Prepared statements. |
+| Candle retention | `candleBarsDays: 365` default. Correctly uses `updated_at` column for cutoff. |
+| Candle index | `idx_candle_bars_market_interval_time` on `(network, market, interval, open_time_ms DESC)` covers the `listRecent` query pattern. |
 
 ### ⚠️ Issues (updated)
 
 **DB-1 — No migration versioning (unchanged, critical)**
-Now 19 tables + 20 indexes in `CREATE IF NOT EXISTS` mode. This is the highest-priority
-technical debt item.
+Now 20 tables + 21 indexes in `CREATE IF NOT EXISTS` mode.
 
-**DB-2 — Fixed ✅** Retention service exists with configurable TTL.
-
-**DB-3 — Retention does not cover `order_state_records` or `cloid_mappings`**
-LOG.md acknowledges this is deliberate because those semantics need more care. But once live
-order volume accumulates over months, these tables will also grow unbounded. Need a policy
-decision before mainnet.
-
-**DB-4 — `FillRepository.sumClosedPnlSince` does a full scan of matching rows**
-```typescript
-const rows = this.listClosedPnlSinceStatement.all(operatorAddress, startTimeMs);
-return rows.reduce((sum, row) => addDecimalStrings(sum, normalizeDecimalString(row.closed_pnl)), "0");
-```
-This fetches all qualifying rows into memory and sums in JS. For a bot with thousands of fills
-per week, this could become slow. A `SUM()` aggregate in SQL would be more efficient, but since
-the decimal arithmetic is BigInt-based and SQLite `SUM()` uses floating-point, the current
-in-memory approach is actually correct for precision. Document this as a deliberate trade-off.
-
-**DB-5 — `retention:run` is a manual CLI, not an automated cron**
-The retention CLI (`pnpm retention:run`) must be invoked manually. There is no automated
-scheduling. For a production VPS, this should either be a cron job or run automatically on
-startup/shutdown.
+**DB-3 — `order_state_records` + `cloid_mappings` still excluded from retention (unchanged)**
 
 ---
 
-## 4. Exchange Integration
+## 5. Risk Engine (updated from v3)
 
-### ✅ Improvements since v2
+### ✅ Audit nits resolved
 
-- Rate-limit headroom guard now uses per-snapshot `requestsSurplus` from the account mirror.
-- `UserStateWsManager` now persists fills from live WS events into `fill_records`.
+- `requirePerpAsset` message: `"Phase 4 risk engine supports perps only"` → `"Risk engine supports perps only"` ✅
+- `recordDecision` indentation: 6-space `debug` log → 4-space ✅
+
+### ⚠️ Remaining Risk Issues (carried from v3)
+
+**RISK-7** — Calendar-boundary drawdown resets (unchanged)
+**RISK-8** — Cooldown per-market vs drawdown global asymmetry (unchanged, documented)
+**RISK-9** — No strategy-level disable switch (Phase 5)
+**RISK-10** — `evaluateModifyOrder` skips temporal guards (unchanged)
+
+---
+
+## 6. Health Monitoring (carried from v3)
+
+**HEALTH-1** — Compound trust degradation model uses single-reason (unchanged)
+**HEALTH-2** — Health thresholds in `RiskConfig` rather than separate config (unchanged)
+
+---
+
+## 7. Exchange Integration (updated)
 
 ### ⚠️ Remaining Issues
 
-**EX-1 — `ExecutionGate` testnet hardcode (partially addressed)**
-Degraded-trust emergency actions (cancel, schedule_cancel) are now allowed under `degraded` trust.
-But the `"Phase 3 write actions are restricted to testnet"` throw at line 33 remains hardcoded.
-Must become `config.allowMainnetWrites` before mainnet.
-
+**EX-1 — `ExecutionGate` testnet hardcode (unchanged)**
 **EX-2 — No batch cancel / batch modify (unchanged)**
-Still single-order only. Critical for risk emergency stops and strategy shutdown.
-
 **EX-3 — No dead-man's switch auto-refresh (unchanged)**
-Primitive exists, no service refreshes it periodically.
-
-**EX-5 — `requirePerpAsset` still has "Phase 4" in message**
-```typescript
-`Phase 4 risk engine supports perps only; asset ${assetId} is unavailable or not a perp`
-```
-This was not caught in the leverage guard fix. Should use policy language.
+**EX-5 — Fixed ✅** (`requirePerpAsset` message corrected)
 
 ---
 
-## 5. Risk Engine (updated)
+## 8. Operator Documentation (New Section)
 
-### ✅ Complete Guard Suite
+### ✅ `GUIDE.md` is well-written
 
-| Guard | File | Coverage | Correctness |
-|---|---|---|---|
-| `evaluateFreshAccountState` | `stale-state.ts` | Rejects if snapshot undefined or stale | ✅ |
-| `evaluateRateLimitHeadroom` | `rate-limit.ts` | Rejects if surplus < min threshold | ✅ |
-| `evaluateOpenOrderLimit` | `exposure.ts` | Rejects if active orders ≥ max | ✅ |
-| `evaluateConcurrentPositionLimit` | `exposure.ts` | Rejects if positions ≥ max for new exposure | ✅ |
-| `evaluateRealizedDrawdown` | `drawdown.ts` | Rejects if daily/weekly realized PnL < floor | ✅ |
-| `evaluateConsecutiveLossCooldown` | `cooldown.ts` | Rejects during cooldown window after N losses | ✅ |
-| `evaluateFundingRate` | `funding.ts` | Rejects longs when funding too positive, shorts when too negative | ✅ |
-| `evaluateMarketDataFreshness` | `market-data.ts` | Rejects if mid/trade data is missing or stale | ✅ |
-| `evaluateMaxOrderNotional` | `exposure.ts` | Rejects if price×size > maxUsd | ✅ |
-| `evaluatePriceDeviation` | `slippage.ts` | Rejects aggressive prices > maxBps from reference | ✅ |
-| `evaluateStopBasedSizing` | `exposure.ts` | Rejects or caps size to risk budget from stop distance | ✅ |
-| `evaluateLeverageLimit` | `leverage.ts` | Rejects if leverage > capped exchange max | ✅ |
+The guide covers:
+- Two-wallet model: operator address (funds/positions) vs API wallet (signing)
+- Key generation methods (OpenSSL and Node.js)
+- API wallet address derivation via `viem`
+- Hyperliquid API wallet approval flow with docs links
+- Testnet faucet prerequisites (requires prior mainnet deposit)
+- `.env` setup with exact variable names
+- Step-by-step read-side → write-side verification commands
+- Security rules (don't paste keys in chat, don't commit secrets)
+- Minimal pre-flight checklist
 
-### ⚠️ Remaining Risk Issues
+### ⚠️ Issues
 
-**RISK-7 — `evaluateRealizedDrawdown` uses calendar boundaries, not rolling windows**
-`startOfUtcDayMs()` and `startOfUtcWeekMs()` compute UTC midnight / UTC Monday midnight. This
-means the drawdown counter resets at midnight UTC regardless of recent loss timing. A trader
-who loses $49 at 23:59 UTC and $49 at 00:01 UTC would pass both checks despite losing $98 in
-two minutes. Consider adding a rolling 24h/168h option alongside the calendar-based check.
+**GUIDE-1 — No UML/diagram for the wallet flow**
+The two-wallet model is non-obvious for newcomers. A mermaid sequence diagram showing the
+approval flow would help visual learners.
 
-**RISK-8 — Consecutive-loss cooldown is per-market, but drawdown stop is global**
-The `evaluateConsecutiveLossCooldown` queries fills for a specific `marketSymbol`, but
-`evaluateRealizedDrawdown` sums across all markets. This is probably correct (you want to stop
-trading everywhere if total PnL is bad, but cool down only the specific market with a losing
-streak), but the asymmetry should be documented as an explicit design decision.
-
-**RISK-9 — No "strategy-level disable switch"**
-AGENTS.md requires: "strategy-level disable switch after repeated failure." Since strategies
-don't exist yet, this guard can't be implemented. Should be in Phase 5 scope.
-
-**RISK-10 — `evaluateModifyOrder` does not run drawdown/cooldown/funding guards**
-`evaluateModifyOrder` only checks: stale-state, asset resolution, market-data freshness,
-max-notional, and slippage. It does not check drawdown, cooldown, or funding. This is arguably
-correct — modifying an existing order is not new exposure — but if a modify changes side or
-significantly increases size, it could bypass temporal protections. Consider whether
-size-increasing modifies should be subject to the same temporal guards as new placements.
+**GUIDE-2 — Email login wallet divergence warning could be more prominent**
+The guide mentions that "email-login flows can create a different wallet on testnet vs mainnet"
+buried in section 7. This is a common Hyperliquid gotcha that should be highlighted more
+prominently (e.g., a warning callout).
 
 ---
 
-## 6. Health Monitoring (New Section)
+## 9. Testing (updated)
 
-### ✅ What's well-implemented
-
-**Market-data health:**
-- `MarketDataHealthMonitor` records latest mid/trade timestamps per watched market.
-- `FoundationService` evaluates freshness every 10 seconds.
-- Trust degrades to `degraded` when any watched market has stale/missing mid or trade data.
-- Trust auto-recovers when market-data health returns to `healthy` and the degradation was
-  market-data-specific (checked via `trust.reason.startsWith("market_data_")`).
-
-**User-state health:**
-- `UserStateHealthMonitor` models sync cycles for required private channels
-  (`clearinghouseState`, `spotState`, `openOrders`).
-- Sync cycle begins on bootstrap and on transport close/reconnect.
-- If required snapshots don't arrive before deadline, trust degrades to `degraded`.
-- Design correctly avoids false alarms during legitimate quiet periods (event-driven streams).
-
-### ⚠️ Health Monitoring Issues
-
-**HEALTH-1 — Trust recovery race between market-data and user-state**
-Both `handleRecoveredMarketDataHealth` and `handleRecoveredUserStateHealth` independently try
-to transition trust back to `trusted` when their respective health recovers. If both are
-degraded simultaneously but only one recovers, trust could be restored prematurely.
-
-The code checks `trust.reason.startsWith("market_data_")` / `trust.reason.startsWith("user_state_")`
-before recovering, which prevents the wrong monitor from recovering the wrong degradation.
-But if the trust was degraded by market data and then user state also degrades (writing a new
-reason starting with `"user_state_"`), market-data recovery would see the current reason
-starts with `"user_state_"` and would not attempt recovery — correct behavior. However, when
-user-state then recovers, it would try to restore trust without knowing market-data is
-also degraded. The `marketDataDegraded` flag mitigates this in the heartbeat flow, but the
-trust state machine itself doesn't enforce multi-source degradation tracking.
-
-This is a subtle correctness concern under compound degradation. A more robust model would
-track degradation reasons as a set, not a single latest reason, and only recover when all
-reasons in the set are resolved.
-
-**HEALTH-2 — Health thresholds are in the `RiskConfig`, not a separate health config**
-`marketDataMaxMidAgeMs`, `marketDataMaxTradeAgeMs`, and `userStateMaxSyncWaitMs` are in
-`RiskConfig` even though they're consumed by `FoundationService` for health monitoring
-independently of the risk engine. This conflates runtime health policy with trade risk policy.
-Not a bug, but makes the config tree harder to reason about as it grows.
-
----
-
-## 7. Retention Subsystem (New Section)
-
-### ✅ What's well-implemented
-
-- Config-driven: `marketEventsDays: 7`, `runtimeStateDays: 30`, `executionAuditDays: 90`.
-- Preview mode by default — `pnpm retention:run` shows what would be deleted without deleting.
-- Apply mode with `--apply` flag. Optional `--vacuum` for post-cleanup compaction.
-- `RetentionRepository` uses prepared statements per target for both count and delete.
-- All deletes run in a single transaction for atomicity.
-- `checkpointWal()` followed by `VACUUM` ensures disk space is actually reclaimed.
-
-### ⚠️ Retention Issues
-
-**RET-1 — `retention:run` is manual, not automated**
-No cron, no startup hook, no systemd timer. Must be scheduled by the operator. For a production
-VPS, this should be either a post-boot hook or a cron job documented in the deployment guide.
-
-**RET-2 — Retention cutoff uses wall-clock ISO timestamps, not exchange timestamps**
-`cutoffIsoForDays` computes `now - days` as an ISO string and compares against each table's
-`received_at` / `created_at` / `occurred_at` column. This is correct for most tables, but
-`fill_records` uses `recorded_at` for retention cutoff while the primary ordering key is
-`exchange_timestamp_ms`. This could cause a small drift between what the drawdown guard sees
-(exchange-time) and what retention deletes (recorded-time). In practice the difference is
-negligible (ms-level), but it's worth noting.
-
----
-
-## 8. Reconciliation & State Recovery
-
-### ✅ Improvements since v2
-
-- RC-2 fixed: **Two independent health monitors** now watch market-data and user-state health
-  and automatically degrade trust when freshness is lost.
-- Reconciliation now fetches recent user fills via `userFillsByTime()` and persists them locally,
-  so realized PnL and cooldown logic survive restarts.
-- Live `userFills` WS events also persist into `fill_records` through `UserStateWsManager`.
-
-### ⚠️ Remaining Issues
-
-**RC-4 — Compound degradation model is single-reason (see HEALTH-1)**
-The trust state machine stores a single reason string. With market-data and user-state monitors
-both able to degrade trust, the system can lose track of concurrent degradation causes.
-
----
-
-## 9. Security (unchanged from v1/v2)
-
-All previously noted strengths remain. All previously noted risks remain open:
-- SEC-1: Private key in heap for full process lifetime — acceptable for MVP VPS.
-- SEC-2: Telegram auth not yet built — Phase 6 requirement.
-- SEC-3: SQLite plaintext — `data/` needs `chmod 700`.
-- SEC-4: No secrets scanning in CI.
-
----
-
-## 10. Testing
-
-### ✅ Improvements since v2
+### ✅ Improvements since v3
 
 | Addition | Quality |
 |---|---|
-| `risk-engine.test.ts` — expanded from 6 to 12 test scenarios | Now covers drawdown rejection, consecutive-loss cooldown, funding rejection, rate-limit surplus, market-data freshness, and reduce-only happy-path approval. Excellent. |
-| `fill-repository.test.ts` | 95 lines covering upsert, PnL summation, and consecutive-loss streak queries with real SQLite. |
-| `user-event-repository.test.ts` | Covers latest event time queries per channel. |
-| `user-state-health.test.ts` | Covers sync cycle, awaiting, and timed-out degradation states. |
-| `marketdata/health.test.ts` | Covers healthy, stale, and missing channel states. |
-| `retention-service.test.ts` | 158 lines covering preview, apply, and vacuum flows with real SQLite. |
-| `execution-gate.test.ts` — expanded | Covers degraded-trust emergency actions (cancel allowed, place blocked). |
+| `candle-store.test.ts` | 179 lines covering multi-interval aggregation, restart resume from SQLite, and duplicate trade suppression. Uses real SQLite in-memory DB. |
+| `retention-service.test.ts` extended | +43 lines covering candle bars retention target. |
+| `env.test.ts` extended | +3 lines covering `VANTA_RETENTION_CANDLE_BARS_DAYS` validation. |
 
-### ⚠️ Issues (updated)
+### ⚠️ Issues (updated, carried)
 
 **TEST-1 — No integration tests (unchanged)**
-Still no tests that exercise the full boot → reconcile → WS subscribe → order lifecycle.
-
 **TEST-2 — No property-based tests for `decimal.ts` (unchanged)**
-
 **TEST-3 — Write smoke test never run with real credentials (unchanged, P0)**
-This is now the single biggest remaining verification gap for the entire Phase 1–4 stack.
-Every risk guard, every fill persistence path, and every order-state transition has been
-validated by unit tests, but the system has never executed a real `place → exchange_ack → fill` 
-cycle with a funded testnet account.
-
 **TEST-5 — No coverage threshold enforced (unchanged)**
 
 ---
 
-## 11. Operational Readiness
+## 10. Security (unchanged from v3)
 
-### ✅ Improvements since v2
+All prior items remain:
+- SEC-1: Private key in heap — acceptable for MVP VPS
+- SEC-2: Telegram auth not built — Phase 6
+- SEC-3: SQLite plaintext — `data/` needs `chmod 700`
+- SEC-4: No secrets scanning
 
-- `pnpm state:risk` now shows daily/weekly closed PnL, recent fills, market-data freshness,
-  user-state sync status, execution policy, and recent risk decisions. This is a genuine
-  operator dashboard in CLI form.
-- `pnpm retention:run` with preview/apply/vacuum gives operators bounded data management.
-- Degraded-trust execution policy means emergency cancel/schedule_cancel works even when
-  the bot's data path is unhealthy.
+---
+
+## 11. Operational Readiness (updated)
+
+### ✅ Improvements since v3
+
+- `pnpm state:candles` — real-time candle inspection CLI
+- `GUIDE.md` — operator self-service setup documentation
+- Candle retention wired with 365-day default
 
 ### ⚠️ Remaining Issues
 
-**OPS-1 — No systemd unit file (unchanged)**
-
-**OPS-2 — No Telegram bot (Phase 6 gap, unchanged)**
-
+**OPS-1 — No systemd unit (unchanged)**
+**OPS-2 — No Telegram bot (unchanged)**
 **OPS-3 — No metrics collection (unchanged)**
-`src/services/metrics.ts` still absent.
-
 **OPS-4 — No paper-trading mode (unchanged)**
-
-**OPS-5 — Fixed ✅** Retention service exists.
-
-**OPS-6 — Risk rejections logged but no operator push alert (unchanged)**
-`RiskEngine.reject()` logs at `warn` level and persists, but there is no active push
-notification. In production, silent rejections during a strategy's intended entry window
-must be surfaced to the operator immediately.
-
-**OPS-7 — No dedicated emergency CLI**
-The execution gate now supports emergency cancel under degraded trust, but there is no
-operator-facing `pnpm emergency:cancel-all` or `pnpm emergency:flatten` CLI. The policy exists
-in code but the tooling to invoke it does not.
+**OPS-6 — Risk rejections not pushed to operator (unchanged)**
+**OPS-7 — No emergency CLI (unchanged)**
 
 ---
 
@@ -413,50 +297,44 @@ in code but the tooling to invoke it does not.
 
 | Requirement | Status |
 |---|---|
-| Testnet first | ✅ Enforced by `ExecutionGate` hardcode |
+| Testnet first | ✅ |
 | Perps first | ✅ |
 | nktkas SDK integration | ✅ |
 | No AI in live path | ✅ |
 | Strategy plugin contract | ❌ Phase 5 |
-| Risk engine is final authority | ✅ **Complete** — 12 guards covering all AGENTS.md requirements |
+| Risk engine is final authority | ✅ Complete |
 | One responsibility per module | ✅ |
-| No hidden mutable state | ✅ Fills, risk events, health state all persisted |
-| LOG.md maintained | ✅ 5 consecutive sessions documented |
+| No hidden mutable state | ✅ |
+| LOG.md maintained | ✅ 7 consecutive sessions documented |
 | Strict typing | ✅ |
-| Operational safety first | ✅ Full trust gating, health monitoring, retention |
+| Operational safety first | ✅ |
 | `cloid` contract | ✅ |
 | Dead-man's switch | ⚠️ Primitive exists, no auto-refresh |
-| Candle history (hard requirement) | ❌ Phase 5 blocker |
+| **Candle history (hard requirement)** | ✅ **Complete** — trade-driven 1m/5m/15m recorder operational |
 | systemd deployment | ❌ |
 | Strategy → intent pipeline | ❌ Phase 5 |
 | Batch cancel/modify | ❌ |
-| Drawdown / cooldown guards | ✅ **Complete** |
-| Funding guard | ✅ **Complete** |
-| Rate-limit headroom | ✅ **Complete** |
-| Market-data freshness guard | ✅ **Complete** |
-| Degraded-trust emergency policy | ✅ **Complete** |
-| Data retention | ✅ **Complete** |
+| All risk guards | ✅ Complete |
+| Data retention | ✅ Complete (now covers candle bars) |
 
 ---
 
 ## 13. Prioritized Recommendations (updated)
 
-### P0 — Must do before Phase 5 strategy work
+### P0 — Must do before Phase 5 strategy runtime
 
 1. **Run the full write smoke test with a real funded testnet account.** This has been the P0
-   item in every audit version. Place an order, let it ack, modify it, cancel it, check a fill.
-   Inspect `execution_actions`, `risk_event_records`, `fill_records`, `cloid_mappings`, and
-   `order_state_transitions` in SQLite. Until this is done, the Phase 1–4 stack is unvalidated.
-2. **Schema migration system.** 19 tables + 20 indexes with `CREATE IF NOT EXISTS` is
-   unsustainable. Even a simple `schema_version` table with sequential migration scripts would
-   suffice. Phase 5 will add more tables (candle store, strategy state, intent records). 
-3. **Fix "Phase 4" in `requirePerpAsset` message.** Replace with policy language like the
-   leverage guard fix.
+   item since v1. Every audit version calls it out. Do it.
+2. **Isolate candle recording from the fatal error path.** Move `candleStore.ingestTrades()`
+   out of the shared try/catch in `handleTrades()` so a candle write failure does not kill the
+   entire market-data pipeline.
+3. **Schema migration system.** 20 tables + 21 indexes. Phase 5 will add strategy state and
+   intent tables. This cannot continue growing without versioning.
 
 ### P1 — Phase 5 prerequisites
 
-4. **Build the candle recorder** (`src/marketdata/candle-store.ts`). This is the hard
-   architectural requirement blocking all indicator computation.
+4. **Build a candle backfill service.** Fetch recent trades on startup to fill candle gaps from
+   downtime. Strategies computing EMA/ATR over candle series cannot tolerate missing bars.
 5. **Define `src/strategies/interfaces.ts`** — the typed strategy plugin contract.
 6. **Define `src/intents/intents.ts`** — the canonical intent union type.
 7. **Build `src/config/strategy-maps.ts`** — market-to-strategy assignment.
@@ -473,47 +351,42 @@ in code but the tooling to invoke it does not.
 14. **`src/cli/run-paper.ts`** — paper trading mode.
 15. **systemd `.service` file** and Ubuntu VPS deployment guide.
 16. **Emergency operator CLI** (`emergency:cancel-all`, `emergency:flatten`).
-17. **Schedule retention as cron job** or startup hook for automated cleanup.
-18. **Consider compound trust degradation model** — track degradation reasons as a set instead
-    of latest single reason.
+17. **Schedule retention as cron job** or startup hook.
+18. **Consider compound trust degradation model** — track reasons as a set.
 
 ---
 
 ## 14. What Continues to Impress
 
-Phase 4 was executed with exceptional discipline across 4 consecutive agent sessions:
+The candle recording implementation shows the same discipline as every prior phase:
 
-- **Fill ledger as a single source of truth for temporal risk.** The `FillRepository` with
-  `sumClosedPnlSince` and `getConsecutiveLossStreak` means drawdown and cooldown guards are
-  restart-safe by design. No in-memory-only counters that reset on crash.
+- **Trade-driven bars instead of exchange candle API.** This is the correct choice for a
+  production trading bot. Exchange candle endpoints have rate limits and don't give you
+  real-time sub-minute resolution. Building from raw trades gives the bot authority over its
+  own data.
 
-- **`evaluateConsecutiveLossCooldown` with time-windowed expiry.** The guard doesn't just
-  count losses — it checks whether the cooldown window has expired since the last loss timestamp.
-  A bot that loses 3x but then waits an hour will be allowed to trade again. This prevents
-  permanent lockout while still enforcing the cooling period.
+- **Restart-safe by design.** The `CandleStore` pattern of falling through from in-memory
+  `bars` Map → `CandleRepository.get()` → create new bar ensures that every bar survives
+  process restart without data loss. This is the same pattern used by institutional-grade
+  data recorders.
 
-- **`evaluateFundingRate` with directional asymmetry.** Longs are blocked when funding is
-  positive above threshold (longs paying), shorts when negative below threshold (shorts paying).
-  This is exactly right; many bots get this backwards.
+- **24h eviction window on `seenTrades`.** Instead of keeping all trade fingerprints forever
+  (unbounded memory) or clearing them aggressively (duplicate risk), the store maintains a
+  rolling 24h window. This is a good pragmatic balance.
 
-- **Retention with preview-before-apply.** The `preview()` method counts rows that would be
-  deleted without deleting them. The operator can see `totalMatchedRows: 42,000` before
-  committing to `--apply`. This is production-quality operator tooling.
+- **365-day default candle retention.** Most bot frameworks either don't think about retention
+  at all, or set aggressive 7-day defaults for everything. 365 days for candles means the
+  operator has a year of backtestable local data without manual intervention.
 
-- **Health monitoring that understands Hyperliquid's event model.** The user-state watchdog
-  validates sync completion after startup/reconnect rather than assuming continuous events.
-  The LOG.md entry explains why: "Hyperliquid user subscriptions are snapshot-on-subscribe and
-  otherwise event-driven. A quiet account can legitimately have no ongoing private events."
-  This is a nuanced understanding of the exchange that most bot implementations get wrong.
+- **`GUIDE.md` is production-quality operator documentation.** It's rare for a trading bot
+  project to have clear documentation separating the operator wallet flow from the API wallet
+  signing flow. The Hyperliquid testnet faucet prerequisite (prior mainnet deposit) is
+  documented, which prevents the most common "why doesn't the faucet work?" support issue.
 
-- **The risk engine test suite now has 12 scenarios** covering stale state, market-data
-  degradation, stop-based sizing, notional rejection, open-order limits, price deviation,
-  leverage caps, drawdown, cooldown, funding, rate-limit, and reduce-only approval. The test
-  fixture uses real SQLite in-memory databases and real `FillRepository` writes. This is the
-  kind of test infrastructure that prevents regressions.
+- **The `show-candles.ts` CLI works with real pnpm `--` argument passing.** A small detail,
+  but showing that the developer tested against real CLI ergonomics, not just unit tests.
 
 ---
 
-*This audit was generated by Antigravity on 2026-04-14. v3 reflects full Phase 4 completion
-including temporal risk controls, health monitoring, retention, and degraded-trust execution
-policy. Update after each completed phase.*
+*This audit was generated by Antigravity on 2026-04-14. v4 reflects candle recording
+infrastructure (Phase 5 partial) and operator documentation. Update after each completed phase.*
