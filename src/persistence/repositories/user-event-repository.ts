@@ -1,9 +1,16 @@
 import type Database from "better-sqlite3";
+import type { Address } from "viem";
 
 import type { NormalizedUserEventRecord } from "../../exchange/user-event-normalizers.js";
 
+interface LatestUserEventTimeRow {
+  readonly event_type: string;
+  readonly received_at: string;
+}
+
 export class UserEventRepository {
   private readonly insertStatement: Database.Statement;
+  private readonly latestTimesStatement: Database.Statement<[string], LatestUserEventTimeRow>;
 
   constructor(private readonly db: Database.Database) {
     this.insertStatement = this.db.prepare(`
@@ -29,6 +36,16 @@ export class UserEventRepository {
         @payloadJson
       )
     `);
+
+    this.latestTimesStatement = this.db.prepare(`
+      SELECT
+        event_type,
+        MAX(received_at) AS received_at
+      FROM user_event_records
+      WHERE operator_address = ?
+      GROUP BY event_type
+      ORDER BY event_type ASC
+    `);
   }
 
   insert(record: NormalizedUserEventRecord, bootId?: string): void {
@@ -53,5 +70,11 @@ export class UserEventRepository {
     });
 
     transaction();
+  }
+
+  getLatestTimes(operatorAddress: Address): Record<string, string> {
+    return Object.fromEntries(
+      this.latestTimesStatement.all(operatorAddress).map((row) => [row.event_type, row.received_at])
+    );
   }
 }

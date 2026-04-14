@@ -14,6 +14,7 @@ import type {
 import type { FillRepository } from "../persistence/repositories/fill-repository.js";
 import type { OrderStateRepository } from "../persistence/repositories/order-state-repository.js";
 import type { RiskEventRepository } from "../persistence/repositories/risk-event-repository.js";
+import type { MarketDataHealthSnapshot, MarketDataMarketHealth } from "../marketdata/health.js";
 import type { AccountMirrorSnapshot } from "../portfolio/account-mirror.js";
 import type { RuntimeTrustController } from "../services/runtime-trust-controller.js";
 import { evaluateConsecutiveLossCooldown } from "./guards/cooldown.js";
@@ -21,6 +22,7 @@ import { evaluateRealizedDrawdown } from "./guards/drawdown.js";
 import { evaluateConcurrentPositionLimit, evaluateMaxOrderNotional, evaluateOpenOrderLimit, evaluateStopBasedSizing } from "./guards/exposure.js";
 import { evaluateFundingRate } from "./guards/funding.js";
 import { evaluateLeverageLimit } from "./guards/leverage.js";
+import { evaluateMarketDataFreshness } from "./guards/market-data.js";
 import { evaluateRateLimitHeadroom } from "./guards/rate-limit.js";
 import { evaluatePriceDeviation } from "./guards/slippage.js";
 import { evaluateFreshAccountState } from "./guards/stale-state.js";
@@ -35,6 +37,7 @@ interface RiskEngineOptions {
   readonly riskEventRepository: RiskEventRepository;
   readonly getAssetRegistry: () => AssetRegistry | undefined;
   readonly getAccountSnapshot: () => AccountMirrorSnapshot | undefined;
+  readonly getMarketDataHealthSnapshot: () => MarketDataHealthSnapshot;
 }
 
 export class RiskEngine {
@@ -159,6 +162,14 @@ export class RiskEngine {
       if (!fundingOutcome.ok) {
         this.reject("place_order", args.identity, args.bootId, order, args.correlationId, fundingOutcome.message, guardOutcomes);
       }
+
+      const marketDataOutcome = evaluateMarketDataFreshness({
+        marketHealth: this.getMarketHealth(order.marketSymbol)
+      });
+      guardOutcomes.push(outcomeFromGuard("market_data_freshness", marketDataOutcome.ok ? "approved" : "rejected", marketDataOutcome.message));
+      if (!marketDataOutcome.ok) {
+        this.reject("place_order", args.identity, args.bootId, order, args.correlationId, marketDataOutcome.message, guardOutcomes);
+      }
     }
 
     const notionalOutcome = evaluateMaxOrderNotional({
@@ -251,6 +262,14 @@ export class RiskEngine {
       args.modify.order.assetId,
       guardOutcomes
     );
+
+    const marketDataOutcome = evaluateMarketDataFreshness({
+      marketHealth: this.getMarketHealth(args.modify.order.marketSymbol)
+    });
+    guardOutcomes.push(outcomeFromGuard("market_data_freshness", marketDataOutcome.ok ? "approved" : "rejected", marketDataOutcome.message));
+    if (!marketDataOutcome.ok) {
+      this.reject("modify_order", args.identity, args.bootId, args.modify.order, args.correlationId, marketDataOutcome.message, guardOutcomes);
+    }
 
     const notionalOutcome = evaluateMaxOrderNotional({
       order: args.modify.order,
@@ -488,6 +507,11 @@ export class RiskEngine {
     return asset.context.markPrice !== ""
       ? { value: asset.context.markPrice, source: "mark" }
       : { value: asset.context.oraclePrice, source: "oracle" };
+  }
+
+  private getMarketHealth(marketSymbol: string): MarketDataMarketHealth | undefined {
+    const healthSnapshot = this.options.getMarketDataHealthSnapshot();
+    return healthSnapshot.markets.find((market) => market.market === marketSymbol);
   }
 }
 

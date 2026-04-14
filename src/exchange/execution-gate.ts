@@ -1,7 +1,16 @@
+import type { RuntimeTrustState } from "../core/trust-state.js";
 import type { RuntimeTrustController } from "../services/runtime-trust-controller.js";
 import type { SignerRegistry } from "./signer-registry.js";
 import { ExecutionGateError } from "../core/errors.js";
 import type { ExecutionActionType, ExecutionIdentity } from "./execution-types.js";
+
+export const DEGRADED_TRUST_EMERGENCY_ACTIONS = [
+  "cancel_order",
+  "cancel_order_by_cloid",
+  "schedule_cancel"
+] as const satisfies readonly ExecutionActionType[];
+
+const DEGRADED_TRUST_EMERGENCY_ACTION_SET = new Set<ExecutionActionType>(DEGRADED_TRUST_EMERGENCY_ACTIONS);
 
 export class ExecutionGate {
   constructor(
@@ -12,7 +21,7 @@ export class ExecutionGate {
   requireWriteAccess(actionType: ExecutionActionType): ExecutionIdentity {
     const trustSnapshot = this.runtimeTrustController.getSnapshot();
 
-    if (trustSnapshot.state !== "trusted") {
+    if (!isExecutionAllowedForTrustState(actionType, trustSnapshot.state)) {
       throw new ExecutionGateError(
         `Write action ${actionType} is blocked because runtime trust is ${trustSnapshot.state}`
       );
@@ -28,4 +37,19 @@ export class ExecutionGate {
 
     return identity;
   }
+}
+
+export function isExecutionAllowedForTrustState(
+  actionType: ExecutionActionType,
+  trustState: RuntimeTrustState
+): boolean {
+  if (trustState === "trusted") {
+    return true;
+  }
+
+  if (trustState === "degraded") {
+    return DEGRADED_TRUST_EMERGENCY_ACTION_SET.has(actionType);
+  }
+
+  return false;
 }

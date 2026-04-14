@@ -4,7 +4,9 @@ import type { Logger } from "pino";
 
 import { asJsonValue, type AppConfig, type JsonValue } from "../core/types.js";
 import type { HyperliquidClient } from "../exchange/hyperliquid-client.js";
+import type { UserStateHealthMonitor, UserStateHealthSnapshot } from "../exchange/user-state-health.js";
 import { UserStateWsManager } from "../exchange/user-state-ws-manager.js";
+import type { MarketDataHealthMonitor, MarketDataHealthSnapshot } from "../marketdata/health.js";
 import type { OrderStateMachine } from "../exchange/order-state-machine.js";
 import { MarketDataWsManager } from "../marketdata/ws-manager.js";
 import type { SqliteDatabase } from "../persistence/db.js";
@@ -29,6 +31,8 @@ interface FoundationServiceOptions {
   readonly reconciliationService: ReconciliationService;
   readonly runtimeTrustController: RuntimeTrustController;
   readonly orderStateMachine: OrderStateMachine;
+  readonly marketDataHealthMonitor: MarketDataHealthMonitor;
+  readonly userStateHealthMonitor: UserStateHealthMonitor;
 }
 
 export class FoundationService {
@@ -39,9 +43,12 @@ export class FoundationService {
   private marketDataWsManager?: MarketDataWsManager;
   private userStateWsManager?: UserStateWsManager;
   private heartbeatInterval: NodeJS.Timeout | undefined;
+  private marketDataHealthInterval: NodeJS.Timeout | undefined;
   private stopped = false;
   private fullyStarted = false;
   private reconnectReconciliationInFlight = false;
+  private marketDataDegraded = false;
+  private userStateDegraded = false;
 
   constructor(private readonly options: FoundationServiceOptions) {}
 
@@ -61,7 +68,7 @@ export class FoundationService {
         : {})
     });
 
-    this.recordAppEvent("foundation.starting", "info", "Starting Phase 2 foundation bootstrap", {
+    this.recordAppEvent("foundation.starting", "info", "Starting Vanta foundation bootstrap", {
       sqlitePath: this.options.config.sqlitePath,
       watchedMarkets: [...this.options.config.watchedMarkets],
       operatorAddress: this.options.config.operatorAddress ?? null,
@@ -87,6 +94,7 @@ export class FoundationService {
       transport: this.options.exchangeClient.wsTransport,
       appEvents: this.options.appEventRepository,
       marketEvents: this.options.marketEventRepository,
+      healthMonitor: this.options.marketDataHealthMonitor,
       logger: this.options.logger.child({ module: "marketdata.ws-manager" }),
       onFatalFailure: (error) => {
         this.handleRuntimeFailure(error);
@@ -114,6 +122,7 @@ export class FoundationService {
         accountMirror: this.options.reconciliationService.getAccountMirror(),
         openOrderMirror: this.options.reconciliationService.getOpenOrderMirror(),
         orderStateMachine: this.options.orderStateMachine,
+        healthMonitor: this.options.userStateHealthMonitor,
         getRegistry: () => this.options.reconciliationService.getAssetRegistry(),
         onFatalFailure: (error) => {
           this.handleRuntimeFailure(error);
@@ -137,7 +146,7 @@ export class FoundationService {
       }
     });
 
-    this.recordAppEvent("foundation.ready", "info", "Phase 2 foundation service is running", {
+    this.recordAppEvent("foundation.ready", "info", "Vanta foundation service is running", {
       trustState: this.options.reconciliationService.getCurrentTrustState(),
       operatorConfigured: this.options.config.operatorAddress !== undefined
     });
@@ -163,6 +172,11 @@ export class FoundationService {
     if (this.heartbeatInterval !== undefined) {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = undefined;
+    }
+
+    if (this.marketDataHealthInterval !== undefined) {
+      clearInterval(this.marketDataHealthInterval);
+      this.marketDataHealthInterval = undefined;
     }
 
     if (this.userStateWsManager !== undefined) {
@@ -234,18 +248,29 @@ export class FoundationService {
 
   private startHeartbeat(): void {
     this.heartbeatInterval = setInterval(() => {
+      const marketDataHealth = this.getMarketDataHealthSnapshot();
+      const userStateHealth = this.getUserStateHealthSnapshot();
       this.options.logger.info(
         {
           bootId: this.bootId,
           trustState: this.options.reconciliationService.getCurrentTrustState(),
           marketDataStats: this.marketDataWsManager?.getStats() ?? {},
-          userStateStats: this.userStateWsManager?.getStats() ?? {}
+          marketDataHealth,
+          userStateStats: this.userStateWsManager?.getStats() ?? {},
+          userStateHealth
         },
         "Foundation heartbeat"
       );
     }, 30_000);
 
     this.heartbeatInterval.unref();
+
+    this.marketDataHealthInterval = setInterval(() => {
+      this.evaluateMarketDataHealth();
+      this.evaluateUserStateHealth();
+    }, 10_000);
+
+    this.marketDataHealthInterval.unref();
   }
 
   private handleTransportOpen(): void {
@@ -294,6 +319,7 @@ export class FoundationService {
     );
 
     this.options.reconciliationService.getAccountMirror().markStale();
+    this.userStateWsManager?.beginSnapshotCycle("transport_reconnect_pending");
     this.recordAppEvent("foundation.transport_degraded", "warn", "Runtime trust downgraded after transport close", {
       code: event?.code ?? null,
       reason: event?.reason ?? null
@@ -344,6 +370,146 @@ export class FoundationService {
     if (result.openOrderSnapshot !== undefined) {
       this.options.orderStateMachine.applyOpenOrderSnapshot(result.openOrderSnapshot);
     }
+  }
+
+  private evaluateMarketDataHealth(): void {
+    if (!this.fullyStarted || this.stopped) {
+      return;
+    }
+
+    const health = this.getMarketDataHealthSnapshot();
+
+    if (health.status === "healthy") {
+      this.handleRecoveredMarketDataHealth(health);
+      return;
+    }
+
+    this.handleDegradedMarketDataHealth(health);
+  }
+
+  private evaluateUserStateHealth(): void {
+    const health = this.getUserStateHealthSnapshot();
+    if (health === undefined) {
+      return;
+    }
+
+    if (health.status === "healthy") {
+      this.handleRecoveredUserStateHealth(health);
+      return;
+    }
+
+    if (health.status === "degraded") {
+      this.handleDegradedUserStateHealth(health);
+    }
+  }
+
+  private handleDegradedMarketDataHealth(health: MarketDataHealthSnapshot): void {
+    if (this.marketDataDegraded) {
+      return;
+    }
+
+    this.marketDataDegraded = true;
+    this.options.runtimeTrustController.transition(
+      "degraded",
+      "market_data_unhealthy",
+      asJsonValue(health),
+      this.bootId
+    );
+    this.recordAppEvent(
+      "foundation.market_data_unhealthy",
+      "warn",
+      "Runtime trust downgraded because market-data freshness is unhealthy",
+      asJsonValue(health)
+    );
+  }
+
+  private handleRecoveredMarketDataHealth(health: MarketDataHealthSnapshot): void {
+    if (!this.marketDataDegraded) {
+      return;
+    }
+
+    this.marketDataDegraded = false;
+    const trust = this.options.runtimeTrustController.getSnapshot();
+
+    if (trust.state === "degraded" && trust.reason.startsWith("market_data_")) {
+      this.options.runtimeTrustController.transition(
+        "trusted",
+        "market_data_recovered",
+        asJsonValue(health),
+        this.bootId
+      );
+    }
+
+    this.recordAppEvent(
+      "foundation.market_data_recovered",
+      "info",
+      "Market-data freshness returned to healthy state",
+      asJsonValue(health)
+    );
+  }
+
+  private handleDegradedUserStateHealth(health: UserStateHealthSnapshot): void {
+    if (this.userStateDegraded) {
+      return;
+    }
+
+    this.userStateDegraded = true;
+    this.options.runtimeTrustController.transition(
+      "degraded",
+      "user_state_sync_unhealthy",
+      asJsonValue(health),
+      this.bootId
+    );
+    this.recordAppEvent(
+      "foundation.user_state_unhealthy",
+      "warn",
+      "Runtime trust downgraded because required user-state sync did not complete",
+      asJsonValue(health)
+    );
+  }
+
+  private handleRecoveredUserStateHealth(health: UserStateHealthSnapshot): void {
+    if (!this.userStateDegraded) {
+      return;
+    }
+
+    this.userStateDegraded = false;
+    const trust = this.options.runtimeTrustController.getSnapshot();
+
+    if (trust.state === "degraded" && trust.reason.startsWith("user_state_")) {
+      this.options.runtimeTrustController.transition(
+        "trusted",
+        "user_state_sync_recovered",
+        asJsonValue(health),
+        this.bootId
+      );
+    }
+
+    this.recordAppEvent(
+      "foundation.user_state_recovered",
+      "info",
+      "Required user-state sync returned to healthy state",
+      asJsonValue(health)
+    );
+  }
+
+  private getMarketDataHealthSnapshot(now = new Date()): MarketDataHealthSnapshot {
+    return this.options.marketDataHealthMonitor.getSnapshot(
+      this.options.config.watchedMarkets,
+      {
+        maxMidAgeMs: this.options.config.risk.marketDataMaxMidAgeMs,
+        maxTradeAgeMs: this.options.config.risk.marketDataMaxTradeAgeMs
+      },
+      now
+    );
+  }
+
+  private getUserStateHealthSnapshot(now = new Date()): UserStateHealthSnapshot | undefined {
+    if (this.userStateWsManager === undefined) {
+      return undefined;
+    }
+
+    return this.userStateWsManager.getHealthSnapshot(this.options.config.risk.userStateMaxSyncWaitMs, now);
   }
 }
 

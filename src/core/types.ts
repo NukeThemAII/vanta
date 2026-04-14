@@ -38,6 +38,9 @@ export interface RiskConfig {
   readonly maxOpenOrders: number;
   readonly maxConcurrentPositions: number;
   readonly maxPriceDeviationBps: number;
+  readonly marketDataMaxMidAgeMs: number;
+  readonly marketDataMaxTradeAgeMs: number;
+  readonly userStateMaxSyncWaitMs: number;
   readonly maxLeverageFractionOfExchangeMax: number;
   readonly defaultRiskFractionOfAccount: string;
   readonly maxDailyRealizedDrawdownUsd: string;
@@ -49,12 +52,19 @@ export interface RiskConfig {
   readonly enforceStopLossForEntries: boolean;
 }
 
+export interface RetentionConfig {
+  readonly marketEventsDays: number;
+  readonly runtimeStateDays: number;
+  readonly executionAuditDays: number;
+}
+
 export interface AppConfig {
   readonly appEnv: AppEnvironment;
   readonly network: NetworkConfig;
   readonly logLevel: LogLevel;
   readonly sqlitePath: string;
   readonly risk: RiskConfig;
+  readonly retention: RetentionConfig;
   readonly watchedMarkets: readonly FoundationMarket[];
   readonly operatorAddress?: Address;
   readonly apiWallet?: ApiWalletConfig;

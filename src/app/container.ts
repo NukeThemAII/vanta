@@ -11,6 +11,8 @@ import { ExecutionNonceController } from "../exchange/nonce-manager.js";
 import { HyperliquidOrderFormatter } from "../exchange/order-formatter.js";
 import { OrderStateMachine } from "../exchange/order-state-machine.js";
 import { SignerRegistry } from "../exchange/signer-registry.js";
+import { UserStateHealthMonitor } from "../exchange/user-state-health.js";
+import { MarketDataHealthMonitor } from "../marketdata/health.js";
 import { SqliteDatabase } from "../persistence/db.js";
 import { AssetRegistryRepository } from "../persistence/repositories/asset-registry-repository.js";
 import { AppBootRepository } from "../persistence/repositories/app-boot-repository.js";
@@ -21,6 +23,7 @@ import { FillRepository } from "../persistence/repositories/fill-repository.js";
 import { MarketEventRepository } from "../persistence/repositories/market-event-repository.js";
 import { OrderStateRepository } from "../persistence/repositories/order-state-repository.js";
 import { ReconciliationRepository } from "../persistence/repositories/reconciliation-repository.js";
+import { RetentionRepository } from "../persistence/repositories/retention-repository.js";
 import { RiskEventRepository } from "../persistence/repositories/risk-event-repository.js";
 import { RuntimeStateRepository } from "../persistence/repositories/runtime-state-repository.js";
 import { StateSnapshotRepository } from "../persistence/repositories/state-snapshot-repository.js";
@@ -28,6 +31,7 @@ import { UserEventRepository } from "../persistence/repositories/user-event-repo
 import { RiskEngine } from "../risk/risk-engine.js";
 import { FoundationService } from "../services/foundation-service.js";
 import { ReconciliationService } from "../services/reconciliation-service.js";
+import { RetentionService } from "../services/retention-service.js";
 import { RuntimeTrustController } from "../services/runtime-trust-controller.js";
 
 export interface FoundationContainer {
@@ -40,9 +44,13 @@ export interface FoundationContainer {
   readonly reconciliationRepository: ReconciliationRepository;
   readonly runtimeStateRepository: RuntimeStateRepository;
   readonly appEventRepository: AppEventRepository;
+  readonly marketEventRepository: MarketEventRepository;
   readonly userEventRepository: UserEventRepository;
   readonly fillRepository: FillRepository;
   readonly riskEventRepository: RiskEventRepository;
+  readonly marketDataHealthMonitor: MarketDataHealthMonitor;
+  readonly userStateHealthMonitor: UserStateHealthMonitor;
+  readonly retentionService: RetentionService;
   readonly reconciliationService: ReconciliationService;
   readonly runtimeTrustController: RuntimeTrustController;
   readonly signerRegistry: SignerRegistry;
@@ -67,6 +75,9 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
   const cloidMappingRepository = new CloidMappingRepository(database.connection);
   const orderStateRepository = new OrderStateRepository(database.connection);
   const riskEventRepository = new RiskEventRepository(database.connection);
+  const retentionRepository = new RetentionRepository(database.connection);
+  const marketDataHealthMonitor = new MarketDataHealthMonitor();
+  const userStateHealthMonitor = new UserStateHealthMonitor();
   const exchangeLogger = createComponentLogger(logger, "exchange.hyperliquid-client");
   const exchangeClient = new HyperliquidClient(config, exchangeLogger);
   const runtimeTrustController = new RuntimeTrustController(
@@ -111,7 +122,15 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
     getAssetRegistry: () => reconciliationService.getAssetRegistry(),
     getAccountSnapshot: () =>
       reconciliationService.getAccountMirror().getSnapshot()
-      ?? reconciliationService.getLatestPersistedAccountSnapshot()
+      ?? reconciliationService.getLatestPersistedAccountSnapshot(),
+    getMarketDataHealthSnapshot: () =>
+      marketDataHealthMonitor.getSnapshot(
+        config.watchedMarkets,
+        {
+          maxMidAgeMs: config.risk.marketDataMaxMidAgeMs,
+          maxTradeAgeMs: config.risk.marketDataMaxTradeAgeMs
+        }
+      )
   });
   const executionEngine = new ExecutionEngine({
     logger: createComponentLogger(logger, "exchange.execution-engine"),
@@ -138,8 +157,15 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
     exchangeClient,
     reconciliationService,
     runtimeTrustController,
-    orderStateMachine
+    orderStateMachine,
+    marketDataHealthMonitor,
+    userStateHealthMonitor
   });
+  const retentionService = new RetentionService(
+    config.retention,
+    retentionRepository,
+    createComponentLogger(logger, "services.retention-service")
+  );
 
   return {
     config,
@@ -151,9 +177,13 @@ export function createFoundationContainer(config: AppConfig, logger: Logger): Fo
     reconciliationRepository,
     runtimeStateRepository,
     appEventRepository,
+    marketEventRepository,
     userEventRepository,
     fillRepository,
     riskEventRepository,
+    marketDataHealthMonitor,
+    userStateHealthMonitor,
+    retentionService,
     reconciliationService,
     runtimeTrustController,
     signerRegistry,

@@ -483,3 +483,217 @@ Continue from the updated post-Phase-4 audit and execute the next bounded Phase 
 3. Add the remaining Phase 4 stale-market-data / WebSocket-silence protection so runtime trust degrades automatically when the live signal path becomes uncertain.
 4. Add a basic retention/cleanup service for `market_events`, `user_event_records`, `fill_records`, and `order_state_transitions` before any sustained soak run.
 5. Only after those are in place should the next agent move on to Phase 5 strategy runtime and the first typed intent pipeline.
+
+## 2026-04-13T18:24:30+02:00
+
+### Objective
+Continue Phase 4 only and close the next operational hardening slice:
+- add stale-market-data protection that is shared across runtime health, operator inspection, and risk checks
+- add bounded retention/cleanup tooling for the growing SQLite event/state tables
+- keep the bot inside the existing Phase 1-4 architecture without starting strategies or Telegram
+
+### Files created/changed
+- `LOG.md`
+- `.env.example`
+- `package.json`
+- `src/app/container.ts`
+- `src/cli/run-retention.ts`
+- `src/cli/show-risk-state.ts`
+- `src/config/env.ts`
+- `src/config/retention.ts`
+- `src/config/risk.ts`
+- `src/core/types.ts`
+- `src/marketdata/health.ts`
+- `src/marketdata/ws-manager.ts`
+- `src/persistence/repositories/market-event-repository.ts`
+- `src/persistence/repositories/retention-repository.ts`
+- `src/risk/risk-engine.ts`
+- `src/risk/guards/market-data.ts`
+- `src/services/foundation-service.ts`
+- `src/services/retention-service.ts`
+- `tests/unit/config/env.test.ts`
+- `tests/unit/exchange/execution-gate.test.ts`
+- `tests/unit/marketdata/health.test.ts`
+- `tests/unit/risk/risk-engine.test.ts`
+- `tests/unit/services/retention-service.test.ts`
+
+### What works now
+- Market-data freshness is now explicit instead of assumed:
+  - `MarketDataHealthMonitor` records the latest mid/trade timestamps per watched market
+  - `MarketDataWsManager` updates that shared monitor on every normalized market event
+  - `FoundationService` evaluates freshness every 10 seconds and degrades runtime trust to `degraded` when market data is stale or missing
+  - trust automatically returns to `trusted` when freshness recovers and the degraded reason was market-data-specific
+- The risk engine now has a dedicated `market_data_freshness` guard for place/modify flows:
+  - new exposure is rejected if the requested market does not have healthy mid + trade freshness
+  - guard outcomes are persisted into `risk_event_records` like the other Phase 4 checks
+- Risk config now includes market-data freshness thresholds:
+  - `marketDataMaxMidAgeMs`
+  - `marketDataMaxTradeAgeMs`
+- `state:risk` now reports persisted market-data health derived from the latest `market_events` rows, so operator inspection is consistent with the new freshness model.
+- A retention subsystem now exists:
+  - `RetentionRepository` provides fixed-table preview/delete behavior
+  - `RetentionService` groups retention policy and produces explicit summaries
+  - `pnpm retention:run` previews cleanup safely by default and supports `--apply` and `--vacuum`
+- Retention is config-driven and validated from env:
+  - `marketEventsDays`
+  - `runtimeStateDays`
+  - `executionAuditDays`
+- Verified in this session:
+  - `corepack pnpm typecheck`
+  - `corepack pnpm test`
+  - `corepack pnpm lint`
+  - `corepack pnpm build`
+  - `env VANTA_SQLITE_PATH=./data/vanta-phase4c.sqlite corepack pnpm retention:run`
+  - `timeout 12s env VANTA_NETWORK=testnet VANTA_OPERATOR_ADDRESS=0x1111111111111111111111111111111111111111 VANTA_SQLITE_PATH=./data/vanta-phase4d.sqlite node dist/cli/run-foundation.js`
+  - `env VANTA_NETWORK=testnet VANTA_OPERATOR_ADDRESS=0x1111111111111111111111111111111111111111 VANTA_SQLITE_PATH=./data/vanta-phase4d.sqlite corepack pnpm state:risk`
+- The live read-side foundation path still boots cleanly on testnet after the new market-data monitoring wiring, persists market events, and shuts down cleanly on `SIGTERM`. The follow-up `state:risk` run showed `trustState=trusted` and healthy persisted BTC/ETH market-data freshness.
+
+### Known issues / blockers
+- The largest unresolved Phase 4 item is still the same: no funded testnet write-side smoke run has been executed yet through the fully risk-gated path.
+- The new freshness protection currently watches market data only. There is still no equivalent silence watchdog for the user/account stream (`openOrders`, `orderUpdates`, `userFills`, `clearinghouseState`), so read-side certainty is still stronger on market data than on private user-event continuity.
+- `ExecutionGate` still blocks all writes whenever trust is not `trusted`. That is conservative and correct for now, but future phases may need a deliberately scoped emergency-cancel exception once active positions exist.
+- The retention subsystem currently cleans append-only event/audit tables and snapshot parents by age. It intentionally does not prune `order_state_records` or `cloid_mappings` yet because those semantics need more care once live order volume exists.
+- There is still no funded evidence for the modify/cancel/dead-man write path after the new risk + freshness guards. Operational validation is still pending.
+
+### Exact next steps for the next agent session
+1. Stay inside Phase 4 only. Do not start strategies, Telegram, backtesting, dashboards, or paper mode yet.
+2. Run one funded testnet `smoke:execution --allow-write-actions ...` cycle and inspect:
+   - `execution_actions`
+   - `risk_event_records`
+   - `order_state_transitions`
+   - `fill_records`
+   - `cloid_mappings`
+3. Add a private user-stream silence watchdog so trust degrades when authoritative order/account updates go dark, not just when market data goes stale.
+4. Decide explicitly whether emergency cancel/flatten should remain blocked under degraded trust or get a narrowly scoped exception path before Phase 5.
+5. Only after those two operational decisions are settled should the next agent move into Phase 5 strategy runtime and the first intent pipeline.
+
+## 2026-04-13T19:03:30+02:00
+
+### Objective
+Continue Phase 4 only and close the next private-stream reliability slice:
+- add a watchdog for required private user-state sync on startup/reconnect
+- expose the latest persisted private-event timestamps for operator inspection
+- keep the behavior aligned with Hyperliquid’s event-driven user subscriptions instead of inventing false silence alarms
+
+### Files created/changed
+- `LOG.md`
+- `.env.example`
+- `src/app/container.ts`
+- `src/cli/show-risk-state.ts`
+- `src/config/env.ts`
+- `src/config/risk.ts`
+- `src/core/types.ts`
+- `src/exchange/user-state-health.ts`
+- `src/exchange/user-state-ws-manager.ts`
+- `src/persistence/repositories/user-event-repository.ts`
+- `src/services/foundation-service.ts`
+- `tests/unit/config/env.test.ts`
+- `tests/unit/exchange/user-state-health.test.ts`
+- `tests/unit/persistence/user-event-repository.test.ts`
+
+### What works now
+- Vanta now tracks required private user-state sync explicitly:
+  - `UserStateHealthMonitor` models a sync cycle for the required private channels:
+    - `clearinghouseState`
+    - `spotState`
+    - `openOrders`
+  - `UserStateWsManager` starts a sync cycle on bootstrap and on transport-close/reconnect preparation.
+  - each required private snapshot marks progress inside the active cycle.
+  - if the required snapshots do not arrive before the configured deadline, runtime trust is downgraded to `degraded`.
+- The design is intentionally not a naive “no private event for N seconds” timer.
+  - Based on the Hyperliquid WebSocket docs reviewed in this session, user subscriptions are snapshot-on-subscribe and otherwise event-driven.
+  - That means a quiet account can legitimately have no ongoing private events.
+  - The watchdog therefore validates required sync completion after startup/reconnect instead of treating normal quiet periods as failure.
+- `FoundationService` heartbeats now include both:
+  - market-data health
+  - user-state sync health
+- `state:risk` now exposes `latestUserEventTimes` from persisted `user_event_records`, so operators can inspect the last successful private snapshots without depending on in-memory process state.
+- Risk config now includes `userStateMaxSyncWaitMs`, with strict env validation and `.env.example` coverage.
+- Verified in this session:
+  - `corepack pnpm typecheck`
+  - `corepack pnpm test`
+  - `corepack pnpm lint`
+  - `corepack pnpm build`
+  - `timeout 12s env VANTA_NETWORK=testnet VANTA_OPERATOR_ADDRESS=0x1111111111111111111111111111111111111111 VANTA_SQLITE_PATH=./data/vanta-phase4e.sqlite node dist/cli/run-foundation.js`
+  - `env VANTA_NETWORK=testnet VANTA_OPERATOR_ADDRESS=0x1111111111111111111111111111111111111111 VANTA_SQLITE_PATH=./data/vanta-phase4e.sqlite corepack pnpm state:risk`
+- The live read-side foundation path still starts cleanly on testnet after the new private-sync monitoring wiring. The post-run `state:risk` inspection showed:
+  - `trustState=trusted`
+  - healthy market-data freshness
+  - persisted latest user-event timestamps for account/open-order snapshots
+
+### Known issues / blockers
+- No funded testnet write-side smoke run has been executed yet through the fully risk-gated path. That is still the biggest unresolved Phase 4 item.
+- The new private-stream watchdog proves required sync completion after startup/reconnect, but it does not attempt unconditional “continuous silence” degradation during idle account periods. That is deliberate because the underlying HL private streams are event-driven; a stronger runtime guarantee would need to be tied to active orders/positions rather than raw wall-clock silence.
+- `ExecutionGate` still blocks all writes whenever trust is not `trusted`. That remains conservative and correct, but the repo still has no explicit emergency-cancel/flatten exception policy.
+- There is still no funded evidence for modify/cancel/dead-man behavior after the newer Phase 4 guards.
+
+### Exact next steps for the next agent session
+1. Stay inside Phase 4 only. Do not start strategies, Telegram, dashboards, backtesting, or paper mode yet.
+2. Run one funded testnet `smoke:execution --allow-write-actions ...` cycle and inspect:
+   - `execution_actions`
+   - `risk_event_records`
+   - `order_state_transitions`
+   - `fill_records`
+   - `cloid_mappings`
+3. Decide explicitly whether emergency cancel/flatten should remain blocked under degraded trust or receive a narrowly scoped exception path.
+4. If stronger private-stream continuity guarantees are still wanted after that, tie them to active positions/open orders instead of unconditional idle-account timers.
+5. Only after funded write-path evidence and the emergency-action policy are settled should the next agent move into Phase 5 strategy runtime.
+
+## 2026-04-13T19:21:30+02:00
+
+### Objective
+Continue Phase 4 only and settle the degraded-trust execution policy:
+- keep normal write actions blocked unless trust is `trusted`
+- allow only narrowly scoped emergency safety actions under `degraded` trust
+- expose that policy in operator inspection output
+
+### Files created/changed
+- `LOG.md`
+- `src/cli/show-risk-state.ts`
+- `src/exchange/execution-gate.ts`
+- `tests/unit/exchange/execution-gate.test.ts`
+
+### What works now
+- The execution gate now has explicit degraded-trust behavior instead of an unresolved design note.
+- Under `trusted` runtime state:
+  - all existing write actions remain allowed on testnet
+- Under `degraded` runtime state:
+  - only these emergency/safety actions are allowed:
+    - `cancel_order`
+    - `cancel_order_by_cloid`
+    - `schedule_cancel`
+  - normal write-side expansion remains blocked:
+    - `place_order`
+    - `modify_order`
+    - `update_leverage`
+- Under `untrusted` runtime state:
+  - no write actions are allowed
+- The policy is exported through `isExecutionAllowedForTrustState()` and `DEGRADED_TRUST_EMERGENCY_ACTIONS`, so it is now testable and reusable instead of being hidden inside one conditional.
+- `state:risk` now prints `executionPolicy`, so the operator can see the current trust-to-action policy directly from the CLI.
+- Verified in this session:
+  - `corepack pnpm typecheck`
+  - `corepack pnpm test`
+  - `corepack pnpm lint`
+  - `corepack pnpm build`
+  - `env VANTA_NETWORK=testnet VANTA_OPERATOR_ADDRESS=0x1111111111111111111111111111111111111111 VANTA_SQLITE_PATH=./data/vanta-phase4e.sqlite corepack pnpm state:risk`
+- The operator `state:risk` output now shows:
+  - the explicit execution policy
+  - stale market-data health when inspecting an old persisted DB, which is expected and useful because it makes aged snapshots visibly unsafe
+
+### Known issues / blockers
+- The biggest remaining Phase 4 blocker is still unchanged: no funded testnet write-side smoke run has been executed yet through the fully risk-gated path.
+- The emergency-action policy now exists in code, but there is still no dedicated operator-facing emergency CLI beyond the existing execution primitives. The policy is usable by callers, but not yet exposed as a specialized safety command.
+- `flatten` semantics are still not implemented. The policy currently covers only the already-supported write primitives (`cancel_*` and `schedule_cancel`), not a full flatten workflow.
+- There is still no funded evidence for modify/cancel/dead-man behavior after the newer freshness and trust guards.
+
+### Exact next steps for the next agent session
+1. Stay inside Phase 4 only. Do not start strategies, Telegram, dashboards, backtesting, or paper mode yet.
+2. Run one funded testnet `smoke:execution --allow-write-actions ...` cycle and inspect:
+   - `execution_actions`
+   - `risk_event_records`
+   - `order_state_transitions`
+   - `fill_records`
+   - `cloid_mappings`
+3. Add a minimal operator-facing emergency safety CLI if needed, using the now-explicit degraded-trust policy rather than inventing a new one.
+4. If stronger private-stream continuity guarantees are still wanted later, tie them to active orders/positions instead of idle-account wall-clock silence.
+5. Only after funded write-path evidence is captured should the next agent move into Phase 5 strategy runtime.

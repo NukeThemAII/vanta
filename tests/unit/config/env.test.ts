@@ -15,7 +15,10 @@ describe("parseAppConfig", () => {
     expect(config.watchedMarkets).toEqual(["BTC", "ETH"]);
     expect(config.risk.maxOrderNotionalUsd).toBe("500");
     expect(config.risk.maxDailyRealizedDrawdownUsd).toBe("50");
+    expect(config.risk.marketDataMaxMidAgeMs).toBe(45_000);
+    expect(config.risk.userStateMaxSyncWaitMs).toBe(30_000);
     expect(config.risk.enforceStopLossForEntries).toBe(false);
+    expect(config.retention.marketEventsDays).toBe(7);
   });
 
   it("normalizes CSV market input and optional api wallet config", () => {
@@ -40,6 +43,9 @@ describe("parseAppConfig", () => {
       VANTA_RISK_MAX_OPEN_ORDERS: "12",
       VANTA_RISK_MAX_CONCURRENT_POSITIONS: "5",
       VANTA_RISK_MAX_PRICE_DEVIATION_BPS: "90",
+      VANTA_RISK_MARKET_DATA_MAX_MID_AGE_MS: "15000",
+      VANTA_RISK_MARKET_DATA_MAX_TRADE_AGE_MS: "60000",
+      VANTA_RISK_USER_STATE_MAX_SYNC_WAIT_MS: "12000",
       VANTA_RISK_MAX_LEVERAGE_FRACTION_OF_EXCHANGE_MAX: "0.25",
       VANTA_RISK_DEFAULT_FRACTION_OF_ACCOUNT: "0.01",
       VANTA_RISK_MAX_DAILY_REALIZED_DRAWDOWN_USD: "25",
@@ -48,7 +54,10 @@ describe("parseAppConfig", () => {
       VANTA_RISK_CONSECUTIVE_LOSS_COOLDOWN_MINUTES: "45",
       VANTA_RISK_MAX_ABSOLUTE_FUNDING_RATE: "0.0005",
       VANTA_RISK_MIN_RATE_LIMIT_SURPLUS: "10",
-      VANTA_RISK_ENFORCE_STOP_LOSS_FOR_ENTRIES: "true"
+      VANTA_RISK_ENFORCE_STOP_LOSS_FOR_ENTRIES: "true",
+      VANTA_RETENTION_MARKET_EVENTS_DAYS: "3",
+      VANTA_RETENTION_RUNTIME_STATE_DAYS: "14",
+      VANTA_RETENTION_EXECUTION_AUDIT_DAYS: "120"
     });
 
     expect(config.risk).toEqual({
@@ -56,6 +65,9 @@ describe("parseAppConfig", () => {
       maxOpenOrders: 12,
       maxConcurrentPositions: 5,
       maxPriceDeviationBps: 90,
+      marketDataMaxMidAgeMs: 15_000,
+      marketDataMaxTradeAgeMs: 60_000,
+      userStateMaxSyncWaitMs: 12_000,
       maxLeverageFractionOfExchangeMax: 0.25,
       defaultRiskFractionOfAccount: "0.01",
       maxDailyRealizedDrawdownUsd: "25",
@@ -65,6 +77,11 @@ describe("parseAppConfig", () => {
       maxAbsoluteFundingRate: "0.0005",
       minRateLimitSurplus: 10,
       enforceStopLossForEntries: true
+    });
+    expect(config.retention).toEqual({
+      marketEventsDays: 3,
+      runtimeStateDays: 14,
+      executionAuditDays: 120
     });
   });
 

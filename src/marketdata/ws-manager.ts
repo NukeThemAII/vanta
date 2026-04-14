@@ -4,6 +4,7 @@ import type { Logger } from "pino";
 
 import type { FoundationMarket } from "../config/markets.js";
 import type { AppEventRecordInput, AppEventSeverity, JsonValue } from "../core/types.js";
+import type { MarketDataHealthMonitor, MarketDataHealthSnapshot, MarketDataHealthThresholds } from "./health.js";
 import { normalizeAllMidsEvent, normalizeTradesEvent } from "./normalizers.js";
 import type { AppEventRepository } from "../persistence/repositories/app-event-repository.js";
 import type { MarketEventRepository } from "../persistence/repositories/market-event-repository.js";
@@ -15,6 +16,7 @@ interface MarketDataWsManagerOptions {
   readonly transport: WebSocketTransport;
   readonly appEvents: AppEventRepository;
   readonly marketEvents: MarketEventRepository;
+  readonly healthMonitor: MarketDataHealthMonitor;
   readonly logger: Logger;
   readonly onFatalFailure: (error: Error) => void;
   readonly onTransportOpen?: () => void;
@@ -119,6 +121,10 @@ export class MarketDataWsManager {
     return Object.fromEntries(this.eventCounts);
   }
 
+  getHealthSnapshot(thresholds: MarketDataHealthThresholds, now = new Date()): MarketDataHealthSnapshot {
+    return this.options.healthMonitor.getSnapshot(this.options.markets, thresholds, now);
+  }
+
   private attachSocketListeners(): void {
     if (this.listenersAttached) {
       return;
@@ -147,6 +153,7 @@ export class MarketDataWsManager {
     const normalizedEvents = normalizeAllMidsEvent(event, this.options.markets);
 
     for (const normalizedEvent of normalizedEvents) {
+      this.options.healthMonitor.record(normalizedEvent);
       this.options.marketEvents.insert({
         bootId: this.options.bootId,
         ...normalizedEvent
@@ -160,6 +167,7 @@ export class MarketDataWsManager {
   private handleTrades(market: FoundationMarket, trades: TradesEvent): void {
     const normalizedEvent = normalizeTradesEvent(market, trades);
 
+    this.options.healthMonitor.record(normalizedEvent);
     this.options.marketEvents.insert({
       bootId: this.options.bootId,
       ...normalizedEvent

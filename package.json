@@ -16,6 +16,7 @@
     "reconcile:run": "tsx src/cli/run-reconcile.ts",
     "lint": "eslint .",
     "smoke:execution": "tsx src/cli/testnet-smoke.ts",
+    "retention:run": "tsx src/cli/run-retention.ts",
     "state:account": "tsx src/cli/show-account-state.ts",
     "state:orders": "tsx src/cli/show-open-orders.ts",
     "state:risk": "tsx src/cli/show-risk-state.ts",

@@ -2,6 +2,8 @@ import { createFoundationContainer } from "../app/container.js";
 import { loadAppConfig } from "../config/env.js";
 import { createLogger } from "../core/logger.js";
 import { installRuntimePolyfills } from "../core/runtime.js";
+import { DEGRADED_TRUST_EMERGENCY_ACTIONS } from "../exchange/execution-gate.js";
+import { deriveMarketDataHealth } from "../marketdata/health.js";
 
 async function main(): Promise<void> {
   installRuntimePolyfills();
@@ -18,10 +20,20 @@ async function main(): Promise<void> {
     const recentRiskEvents = container.riskEventRepository.listRecent(10);
     const recentFills =
       config.operatorAddress === undefined ? [] : container.fillRepository.listRecent(config.operatorAddress, 10);
+    const latestUserEventTimes =
+      config.operatorAddress === undefined ? null : container.userEventRepository.getLatestTimes(config.operatorAddress);
     const dailyClosedPnl =
       config.operatorAddress === undefined ? null : container.fillRepository.sumClosedPnlSince(config.operatorAddress, startOfUtcDayMs());
     const weeklyClosedPnl =
       config.operatorAddress === undefined ? null : container.fillRepository.sumClosedPnlSince(config.operatorAddress, startOfUtcWeekMs());
+    const marketDataHealth = deriveMarketDataHealth({
+      markets: config.watchedMarkets,
+      latestTimes: container.marketEventRepository.getLatestTimes(),
+      thresholds: {
+        maxMidAgeMs: config.risk.marketDataMaxMidAgeMs,
+        maxTradeAgeMs: config.risk.marketDataMaxTradeAgeMs
+      }
+    });
 
     console.log(
       JSON.stringify(
@@ -29,6 +41,11 @@ async function main(): Promise<void> {
           network: config.network.name,
           operatorAddress: config.operatorAddress ?? null,
           trustState,
+          executionPolicy: {
+            trusted: "all_write_actions",
+            degraded: [...DEGRADED_TRUST_EMERGENCY_ACTIONS],
+            untrusted: []
+          },
           riskConfig: config.risk,
           account: accountSnapshot === undefined
             ? null
@@ -50,6 +67,8 @@ async function main(): Promise<void> {
             weeklyClosedPnl,
             recentFillCount: recentFills.length
           },
+          marketDataHealth,
+          latestUserEventTimes,
           recentFills,
           recentRiskEvents
         },

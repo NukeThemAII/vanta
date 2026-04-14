@@ -1,6 +1,7 @@
 import pino from "pino";
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_RETENTION_CONFIG } from "../../../src/config/retention.js";
 import { DEFAULT_RISK_CONFIG } from "../../../src/config/risk.js";
 import { resolveNetworkConfig } from "../../../src/config/networks.js";
 import { RiskCheckError } from "../../../src/core/errors.js";
@@ -9,6 +10,7 @@ import { CloidService } from "../../../src/exchange/cloid-service.js";
 import type { ExecutionIdentity, OrderStateRecord } from "../../../src/exchange/execution-types.js";
 import { HyperliquidOrderFormatter } from "../../../src/exchange/order-formatter.js";
 import { SignerRegistry } from "../../../src/exchange/signer-registry.js";
+import { deriveMarketDataHealth, type MarketDataHealthSnapshot } from "../../../src/marketdata/health.js";
 import { SqliteDatabase } from "../../../src/persistence/db.js";
 import { FillRepository } from "../../../src/persistence/repositories/fill-repository.js";
 import { OrderStateRepository } from "../../../src/persistence/repositories/order-state-repository.js";
@@ -49,6 +51,39 @@ describe("RiskEngine", () => {
       })
     ).toThrow(RiskCheckError);
     expect(fixture.riskEvents.listRecent(1)[0]?.decision).toBe("rejected");
+
+    fixture.db.close();
+  });
+
+  it("rejects new exposure when market-data freshness is degraded", () => {
+    const fixture = buildFixture({
+      marketDataHealthSnapshot: deriveMarketDataHealth({
+        markets: ["BTC", "ETH"],
+        latestTimes: {},
+        thresholds: {
+          maxMidAgeMs: DEFAULT_RISK_CONFIG.marketDataMaxMidAgeMs,
+          maxTradeAgeMs: DEFAULT_RISK_CONFIG.marketDataMaxTradeAgeMs
+        }
+      })
+    });
+
+    const request = {
+      marketSymbol: "BTC",
+      side: "buy" as const,
+      price: "68000",
+      size: "0.001",
+      timeInForce: "Alo" as const
+    };
+    const place = fixture.formatter.formatPlaceOrder(request);
+
+    expect(() =>
+      fixture.riskEngine.evaluatePlaceOrder({
+        identity: fixture.identity,
+        request,
+        order: place.order,
+        correlationId: place.correlationId
+      })
+    ).toThrow("Market-data health");
 
     fixture.db.close();
   });
@@ -349,6 +384,7 @@ describe("RiskEngine", () => {
 function buildFixture(args?: {
   readonly accountSnapshot?: AccountMirrorSnapshot;
   readonly config?: AppConfig;
+  readonly marketDataHealthSnapshot?: MarketDataHealthSnapshot;
 }): {
   readonly db: SqliteDatabase;
   readonly identity: ExecutionIdentity;
@@ -370,6 +406,7 @@ function buildFixture(args?: {
   const riskEvents = new RiskEventRepository(db.connection);
   const fills = new FillRepository(db.connection);
   const orderStates = new OrderStateRepository(db.connection);
+  const marketDataHealthSnapshot = args?.marketDataHealthSnapshot ?? makeHealthyMarketDataHealthSnapshot();
 
   return {
     db,
@@ -383,7 +420,8 @@ function buildFixture(args?: {
       fillRepository: fills,
       riskEventRepository: riskEvents,
       getAssetRegistry: () => registry,
-      getAccountSnapshot: () => args?.accountSnapshot ?? makeAccountSnapshot()
+      getAccountSnapshot: () => args?.accountSnapshot ?? makeAccountSnapshot(),
+      getMarketDataHealthSnapshot: () => marketDataHealthSnapshot
     }),
     riskEvents,
     fills,
@@ -398,6 +436,7 @@ function makeConfig(overrides?: Partial<AppConfig>): AppConfig {
     logLevel: "silent",
     sqlitePath: ":memory:",
     risk: DEFAULT_RISK_CONFIG,
+    retention: DEFAULT_RETENTION_CONFIG,
     watchedMarkets: ["BTC", "ETH"],
     operatorAddress: "0x1111111111111111111111111111111111111111",
     apiWallet: {
@@ -406,6 +445,42 @@ function makeConfig(overrides?: Partial<AppConfig>): AppConfig {
     bootstrapUserState: true,
     ...overrides
   };
+}
+
+function makeHealthyMarketDataHealthSnapshot(): MarketDataHealthSnapshot {
+  const now = new Date();
+  const receivedAt = now.toISOString();
+
+  return deriveMarketDataHealth({
+    markets: ["BTC", "ETH"],
+    latestTimes: {
+      BTC: {
+        mid: {
+          receivedAt,
+          exchangeTimestampMs: null
+        },
+        trade: {
+          receivedAt,
+          exchangeTimestampMs: now.getTime()
+        }
+      },
+      ETH: {
+        mid: {
+          receivedAt,
+          exchangeTimestampMs: null
+        },
+        trade: {
+          receivedAt,
+          exchangeTimestampMs: now.getTime()
+        }
+      }
+    },
+    thresholds: {
+      maxMidAgeMs: DEFAULT_RISK_CONFIG.marketDataMaxMidAgeMs,
+      maxTradeAgeMs: DEFAULT_RISK_CONFIG.marketDataMaxTradeAgeMs
+    },
+    now
+  });
 }
 
 function makeAccountSnapshot(

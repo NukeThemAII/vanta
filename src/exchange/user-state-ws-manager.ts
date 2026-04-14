@@ -12,6 +12,7 @@ import type { Address } from "viem";
 
 import type { AppEventRecordInput, AppEventSeverity, JsonValue } from "../core/types.js";
 import type { AssetRegistry } from "./asset-registry.js";
+import type { UserStateHealthMonitor, UserStateHealthSnapshot } from "./user-state-health.js";
 import type { OrderStateMachine } from "./order-state-machine.js";
 import type { AccountStateMirror } from "../portfolio/account-mirror.js";
 import type { OpenOrderMirror } from "./open-order-mirror.js";
@@ -40,6 +41,7 @@ interface UserStateWsManagerOptions {
   readonly accountMirror: AccountStateMirror;
   readonly openOrderMirror: OpenOrderMirror;
   readonly orderStateMachine: OrderStateMachine;
+  readonly healthMonitor: UserStateHealthMonitor;
   readonly getRegistry: () => AssetRegistry | undefined;
   readonly onFatalFailure: (error: Error) => void;
 }
@@ -55,6 +57,8 @@ export class UserStateWsManager {
     if (this.started) {
       return;
     }
+
+    this.beginSnapshotCycle("startup");
 
     const clearinghouseSubscription = await this.options.subscriptionClient.clearinghouseState(
       { user: this.options.operatorAddress },
@@ -131,9 +135,22 @@ export class UserStateWsManager {
     return Object.fromEntries(this.eventCounts);
   }
 
+  beginSnapshotCycle(reason: string, startedAt = new Date().toISOString()): void {
+    this.options.healthMonitor.beginCycle(reason, startedAt);
+    this.recordAppEvent("user_state.sync_cycle_started", "info", "Started required user-state sync cycle", {
+      reason,
+      startedAt
+    });
+  }
+
+  getHealthSnapshot(maxSyncWaitMs: number, now = new Date()): UserStateHealthSnapshot {
+    return this.options.healthMonitor.getSnapshot(maxSyncWaitMs, now);
+  }
+
   private handleClearinghouseState(event: ClearinghouseStateEvent): void {
     const registry = this.requireRegistry();
     const normalizedRecord = normalizeClearinghouseStateEvent(this.options.operatorAddress, event);
+    this.options.healthMonitor.record("clearinghouseState", normalizedRecord.receivedAt);
     this.options.userEventRepository.insert(normalizedRecord, this.options.bootId);
     this.options.accountMirror.applyPerpState({
       syncedAt: normalizedRecord.receivedAt,
@@ -149,6 +166,7 @@ export class UserStateWsManager {
 
   private handleSpotState(event: SpotStateEvent): void {
     const normalizedRecord = normalizeSpotStateEvent(this.options.operatorAddress, event);
+    this.options.healthMonitor.record("spotState", normalizedRecord.receivedAt);
     this.options.userEventRepository.insert(normalizedRecord, this.options.bootId);
     this.options.accountMirror.applySpotState({
       syncedAt: normalizedRecord.receivedAt,
@@ -163,6 +181,7 @@ export class UserStateWsManager {
   private handleOpenOrders(event: OpenOrdersEvent): void {
     const registry = this.requireRegistry();
     const normalizedRecord = normalizeOpenOrdersEvent(this.options.operatorAddress, event);
+    this.options.healthMonitor.record("openOrders", normalizedRecord.receivedAt);
     this.options.userEventRepository.insert(normalizedRecord, this.options.bootId);
     const syncedAt = normalizedRecord.receivedAt;
     this.options.openOrderMirror.applyOpenOrdersSnapshot({
@@ -187,6 +206,7 @@ export class UserStateWsManager {
     const registry = this.requireRegistry();
     const normalizedRecords = normalizeOrderUpdatesEvent(this.options.operatorAddress, event);
     const syncedAt = normalizedRecords[0]?.receivedAt ?? new Date().toISOString();
+    this.options.healthMonitor.record("orderUpdates", syncedAt);
     this.options.userEventRepository.insertMany(normalizedRecords, this.options.bootId);
     this.options.openOrderMirror.applyOrderUpdates({
       orderUpdates: event,
@@ -210,6 +230,7 @@ export class UserStateWsManager {
     const registry = this.requireRegistry();
     const normalizedRecords = normalizeUserFillsEvent(this.options.operatorAddress, event);
     const occurredAt = normalizedRecords[0]?.receivedAt ?? new Date().toISOString();
+    this.options.healthMonitor.record("userFills", occurredAt);
     this.options.userEventRepository.insertMany(normalizedRecords, this.options.bootId);
     this.options.fillRepository.upsertMany(
       normalizeUserFills({
@@ -238,6 +259,7 @@ export class UserStateWsManager {
 
   private handleUserEvents(event: UserEventsEvent): void {
     const normalizedRecord = normalizeUserEventsEvent(this.options.operatorAddress, event);
+    this.options.healthMonitor.record("userEvents", normalizedRecord.receivedAt);
     this.options.userEventRepository.insert(normalizedRecord, this.options.bootId);
     this.increment("userEvents");
     this.logEvent("userEvents", normalizedRecord.payload);

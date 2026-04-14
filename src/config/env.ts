@@ -8,6 +8,7 @@ import { ConfigurationError } from "../core/errors.js";
 import type { AppConfig, AppEnvironment, LogLevel, NetworkName } from "../core/types.js";
 import { deduplicateMarkets, FOUNDATION_MARKETS, FoundationMarketSchema } from "./markets.js";
 import { resolveNetworkConfig } from "./networks.js";
+import { DEFAULT_RETENTION_CONFIG } from "./retention.js";
 import { DEFAULT_RISK_CONFIG } from "./risk.js";
 
 const APP_ENV_SCHEMA = z.enum(["development", "test", "production"]);
@@ -163,6 +164,9 @@ const ENV_SCHEMA = z.object({
   VANTA_RISK_MAX_OPEN_ORDERS: positiveInteger(DEFAULT_RISK_CONFIG.maxOpenOrders),
   VANTA_RISK_MAX_CONCURRENT_POSITIONS: positiveInteger(DEFAULT_RISK_CONFIG.maxConcurrentPositions),
   VANTA_RISK_MAX_PRICE_DEVIATION_BPS: positiveInteger(DEFAULT_RISK_CONFIG.maxPriceDeviationBps),
+  VANTA_RISK_MARKET_DATA_MAX_MID_AGE_MS: positiveInteger(DEFAULT_RISK_CONFIG.marketDataMaxMidAgeMs),
+  VANTA_RISK_MARKET_DATA_MAX_TRADE_AGE_MS: positiveInteger(DEFAULT_RISK_CONFIG.marketDataMaxTradeAgeMs),
+  VANTA_RISK_USER_STATE_MAX_SYNC_WAIT_MS: positiveInteger(DEFAULT_RISK_CONFIG.userStateMaxSyncWaitMs),
   VANTA_RISK_MAX_LEVERAGE_FRACTION_OF_EXCHANGE_MAX: positiveNumber(
     DEFAULT_RISK_CONFIG.maxLeverageFractionOfExchangeMax,
     1
@@ -174,7 +178,10 @@ const ENV_SCHEMA = z.object({
   VANTA_RISK_CONSECUTIVE_LOSS_COOLDOWN_MINUTES: positiveInteger(DEFAULT_RISK_CONFIG.consecutiveLossCooldownMinutes),
   VANTA_RISK_MAX_ABSOLUTE_FUNDING_RATE: positiveDecimalString(DEFAULT_RISK_CONFIG.maxAbsoluteFundingRate),
   VANTA_RISK_MIN_RATE_LIMIT_SURPLUS: nonNegativeInteger(DEFAULT_RISK_CONFIG.minRateLimitSurplus),
-  VANTA_RISK_ENFORCE_STOP_LOSS_FOR_ENTRIES: booleanish(DEFAULT_RISK_CONFIG.enforceStopLossForEntries)
+  VANTA_RISK_ENFORCE_STOP_LOSS_FOR_ENTRIES: booleanish(DEFAULT_RISK_CONFIG.enforceStopLossForEntries),
+  VANTA_RETENTION_MARKET_EVENTS_DAYS: positiveInteger(DEFAULT_RETENTION_CONFIG.marketEventsDays),
+  VANTA_RETENTION_RUNTIME_STATE_DAYS: positiveInteger(DEFAULT_RETENTION_CONFIG.runtimeStateDays),
+  VANTA_RETENTION_EXECUTION_AUDIT_DAYS: positiveInteger(DEFAULT_RETENTION_CONFIG.executionAuditDays)
 });
 
 type ParsedEnvironment = z.infer<typeof ENV_SCHEMA>;
@@ -201,6 +208,9 @@ function buildAppConfig(parsed: ParsedEnvironment): AppConfig {
       maxOpenOrders: parsed.VANTA_RISK_MAX_OPEN_ORDERS,
       maxConcurrentPositions: parsed.VANTA_RISK_MAX_CONCURRENT_POSITIONS,
       maxPriceDeviationBps: parsed.VANTA_RISK_MAX_PRICE_DEVIATION_BPS,
+      marketDataMaxMidAgeMs: parsed.VANTA_RISK_MARKET_DATA_MAX_MID_AGE_MS,
+      marketDataMaxTradeAgeMs: parsed.VANTA_RISK_MARKET_DATA_MAX_TRADE_AGE_MS,
+      userStateMaxSyncWaitMs: parsed.VANTA_RISK_USER_STATE_MAX_SYNC_WAIT_MS,
       maxLeverageFractionOfExchangeMax: parsed.VANTA_RISK_MAX_LEVERAGE_FRACTION_OF_EXCHANGE_MAX,
       defaultRiskFractionOfAccount: parsed.VANTA_RISK_DEFAULT_FRACTION_OF_ACCOUNT,
       maxDailyRealizedDrawdownUsd: parsed.VANTA_RISK_MAX_DAILY_REALIZED_DRAWDOWN_USD,
@@ -210,6 +220,11 @@ function buildAppConfig(parsed: ParsedEnvironment): AppConfig {
       maxAbsoluteFundingRate: parsed.VANTA_RISK_MAX_ABSOLUTE_FUNDING_RATE,
       minRateLimitSurplus: parsed.VANTA_RISK_MIN_RATE_LIMIT_SURPLUS,
       enforceStopLossForEntries: parsed.VANTA_RISK_ENFORCE_STOP_LOSS_FOR_ENTRIES
+    },
+    retention: {
+      marketEventsDays: parsed.VANTA_RETENTION_MARKET_EVENTS_DAYS,
+      runtimeStateDays: parsed.VANTA_RETENTION_RUNTIME_STATE_DAYS,
+      executionAuditDays: parsed.VANTA_RETENTION_EXECUTION_AUDIT_DAYS
     },
     watchedMarkets: parsed.VANTA_MARKETS,
     ...(parsed.VANTA_OPERATOR_ADDRESS !== undefined
